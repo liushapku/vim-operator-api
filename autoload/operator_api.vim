@@ -33,7 +33,6 @@ function! s:setpos(startmark, endmark, motion_wiseness)
   unlockvar s:info
   let pos1 = getpos("'".a:startmark)
   let pos2 = getpos("'".a:endmark)
-  2Log pos1 pos2
   if pos1[1] > pos2[1] || (pos1[1] == pos2[1] && pos1[2] > pos2[2])
     let s:info['start'] = pos2
     let s:info['end'] = pos1
@@ -44,6 +43,8 @@ function! s:setpos(startmark, endmark, motion_wiseness)
   let s:info['motion_wiseness'] = a:motion_wiseness
   lockvar s:info
 endfunction
+
+"let g:oinfo = s:info
 
 " mode: i for imap, v for vmap, n for nmap
 " (omap does not call this function)
@@ -69,11 +70,10 @@ function! s:init_info(callback, invoke_mode, execute_mode)
 endfunction
 
 function! operator_api#operatorfunc(motion_wiseness) abort
-  let F = s:info.callback
-  2Log a:motion_wiseness 'opfunc'
+  let l:F = s:info.callback
   call s:setpos('[', ']', a:motion_wiseness)
   try
-    call F(s:info)
+    call l:F(s:info)
   finally
     let &virtualedit = s:saved.virtualedit
   endtry
@@ -104,8 +104,8 @@ function! operator_api#imap(callback, call_in_normal_mode)
     call s:init_info(a:callback, 'i', 'i')
     set operatorfunc=operator_api#operatorfunc_dummy
     exe "normal! \<c-o>g@"
-    let F = function(a:callback)
-    return F(s:info)
+    let l:F = function(a:callback)
+    return l:F(s:info)
   endif
 endfunction
 function! operator_api#omap(callback)
@@ -124,15 +124,12 @@ function! operator_api#vmap(callback, call_in_normal_mode)
   if a:call_in_normal_mode
     call s:init_info(a:callback, 'v', 'n')
     call s:setpos("<", ">", s:motion_wiseness[visualmode()])
-    "call setpos("'[", s:info.start)
-    "call setpos("']", s:info.end)
-    2Log getpos("'<") getpos("'>")
   else
     call s:init_info(a:callback, 'v', 'v')
     call s:setpos(".", "v", s:motion_wiseness[mode()])
   endif
-  let F = function(a:callback)
-  return F(s:info)
+  let l:F = function(a:callback)
+  return l:F(s:info)
 endfunction
 
 function! operator_api#define(keyseq, callback, ...)
@@ -201,8 +198,25 @@ function! operator_api#visual_select() abort
   endif
 endfunction
 
-function! operator_api#get_visual_selection()
+function! s:text_in_range(pos1, pos2, motion_wiseness)
+  let [l1, c1] = a:pos1[1:2]
+  let [l2, c2] = a:pos2[1:2]
+  let mode = a:motion_wiseness
+  let lines = getline(l1, l2)
+  if mode == 'line' || mode == 'V'
+  elseif mode == 'block' || mode == "\<c-v>"
+    call map(lines, {i,x-> x[c1-1:c2-1]})
+  elseif mode == 'char' || mode == 'v'
+    let lines[0] = lines[0][c1 - 1:]
+    let lines[-1] = lines[-1][: c2 - (&selection == 'inclusive' ? 1 : 2)]
+  else
+    throw 'unknown mode: ' . mode
+  endif
+  return lines
+endfunction
 
+function! operator_api#selection()
+  return s:text_in_range(s:info.start, s:info.end, s:info.motion_wiseness)
 endfunction
 
 function! operator_api#deletion_moves_cursor()
