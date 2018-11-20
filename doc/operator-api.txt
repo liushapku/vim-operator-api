@@ -1,0 +1,138 @@
+*operator-api.txt*	Define your own operator easily
+
+" License: MIT license  {{{
+"     Permission is hereby granted, free of charge, to any person obtaining
+"     a copy of this software and associated documentation files (the
+"     "Software"), to deal in the Software without restriction, including
+"     without limitation the rights to use, copy, modify, merge, publish,
+"     distribute, sublicense, and/or sell copies of the Software, and to
+"     permit persons to whom the Software is furnished to do so, subject to
+"     the following conditions:
+"
+"     The above copyright notice and this permission notice shall be included
+"     in all copies or substantial portions of the Software.
+"
+"     THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+"     OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+"     MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+"     IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+"     CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+"     TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+"     SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+" }}}
+
+CONTENTS					*operator-api-contents*
+
+Introduction		|operator-api-introduction|
+Interface		|operator-api-interface|
+  Functions		  |operator-api-functions|
+Examples		|operator-api-examples|
+Bugs			|operator-api-bugs|
+Changelog		|operator-api-changelog|
+
+
+
+
+==============================================================================
+INTRODUCTION					*operator-api-introduction*
+
+*operator-api* is a Vim library plugin to provide an easy way to define your
+own |operator|, which handles |nmap|, |vmap|, |omap| and |imap| in a consistent
+way. To define new operators, you only need to define a callback accepting the
+*operator-api-info* dict as parameter
+
+For example, the following code defines operator "_" to replace the target
+range with a char typed after. It works in normal, visual, operator-pending and
+even insertion mode.
+>
+    function! s:replace(info)
+        call operator_api#visual_select()
+        exe "normal! r "
+    endfunction
+    call operator_api#define("_", function('s:replace'), 'nvoi')
+<
+You can use this operator as follows:
+
+	2__	replace the chars in two lines with space
+        2_3l	replace 7 chars with space (6l will select 7 chars)
+	_ip	replace the current paragrap with space
+
+See also |operator-api-examples| for more examples and explanations.
+
+
+Requirements:
+- Vim 7.2 or later
+
+Optionals:
+- |grex|              https://github.com/kana/vim-grex
+- |operator-replace|  https://github.com/kana/vim-operator-replace
+- |wwwsearch|         https://github.com/kana/vim-wwwsearch
+
+Latest version:
+https://github.com/liushapku/vim-operator-api
+
+
+==============================================================================
+INTERFACE					*operator-api-interface*
+
+------------------------------------------------------------------------------
+FUNCTIONS					*operator-api-functions*
+
+						*operator_api#define*
+operator_api#define({keyseq}, {function}, [{modes}])
+			Define a new operator.
+
+			{keyseq}	(string)
+				The key sequence to invoke the mapping.
+
+                                You can use operator_api#default_map()
+
+			{function}	(string or Funcref)
+				A function to be called whenever the
+                                operator is executed.
+
+			{modes}		(string)
+				A combinition of chars `nNvViIo`, which
+                                specifies in which modes the map
+                                should be defined. See |operator-api-modes| for
+                                the detailed explaination. default: `"nvo"`
+
+
+				See also |operator-api-examples| how to use.
+
+==============================================================================
+MODES						*operator-api-modes*
+
+There are 4 basic modes `nvio` (|normal|, |visual|, |insert|, |operator-pending|) and
+three variants `NVI` (|normal-no-propagate-count|, |visual-real|, |insert-real|).
+
+                                                              *operator-api-o*
+The |operator-pending| mode mapping will select [count] lines if the operator
+that is pending is the same map. If the operator is not the same, then the
+operator is canceled (equivalent to <esc>)
+
+Therefore, with `_` defined as an operator, `_3_` will act on 3 lines, but `d3_` will
+cancel the `d`.
+
+                                              *operator-api-n* *operator-api-N*
+These defines |normal| mode mappings. The difference between `N` and `n` is that the
+`N` mode DOES NOT pass the number for the operator to the motion, so that
+`3_2e` will only act on 2 words instead of 6 lines; while the `n` mode will
+have these two numbers multiplied. In the `N` mode, you need to handle the
+count in the {callback}.
+
+==============================================================================
+EXAMPLES					*operator-api-examples*
+
+
+==============================================================================
+BUGS						*operator-api-bugs*
+
+
+==============================================================================
+CHANGELOG					*operator-api-changelog*
+
+
+
+==============================================================================
+vim:tw=78:ts=8:ft=help:norl:fen:fdl=0:fdm=marker:
