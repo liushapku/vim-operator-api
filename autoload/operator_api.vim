@@ -31,8 +31,8 @@
 " augument the info dict with 'start', 'end' and 'motion_wiseness'
 function! s:setpos(startmark, endmark, motion_wiseness)
   unlockvar s:info
-  let pos1 = getpos("'".a:startmark)
-  let pos2 = getpos("'".a:endmark)
+  let pos1 = getpos(a:startmark)
+  let pos2 = getpos(a:endmark)
   if pos1[1] > pos2[1] || (pos1[1] == pos2[1] && pos1[2] > pos2[2])
     let s:info['start'] = pos2
     let s:info['end'] = pos1
@@ -53,6 +53,9 @@ endfunction
 " execute_mode: the mode the function is called
 " invoke_mode: the mode the mapping is invoked, (whether it is imap, omap...)
 function! s:init_info(callback, invoke_mode, execute_mode)
+  let s:saved = {
+        \ 'virtualedit': &virtualedit,
+        \ }
   unlock! s:info
   let s:info = {
         \ 'callback' : function(a:callback),
@@ -64,24 +67,22 @@ function! s:init_info(callback, invoke_mode, execute_mode)
         \ 'execute_mode' : a:execute_mode,
         \ }
   lockvar s:info
-  let s:saved = {
-        \ 'virtualedit': &virtualedit,
-        \ }
 endfunction
 
 function! operator_api#operatorfunc(motion_wiseness) abort
   let l:F = s:info.callback
-  call s:setpos('[', ']', a:motion_wiseness)
+  call s:setpos("'[", "']", a:motion_wiseness)
   try
     call l:F(s:info)
+  catch
+    throw 'operator nmap: ' . v:exception
   finally
+    if s:info.invoke_mode == 'i' && s:saved.restore_cursor
+      call cursor(s:info.cursor)
+    endif
     let &virtualedit = s:saved.virtualedit
   endtry
 endfunction
-function! operator_api#operatorfunc_dummy()
-  let &virtualedit = s:saved.virtualedit
-endfunction
-
 function! operator_api#nmap(callback, propagate_count)
   set operatorfunc=operator_api#operatorfunc
   call s:init_info(a:callback, 'n', 'n')
@@ -94,19 +95,16 @@ function! operator_api#nmap(callback, propagate_count)
   "let count_str = count ? string(count) : ''
   return a:propagate_count ? "g@" : '@_g@'
 endfunction
-function! operator_api#imap(callback, call_in_normal_mode)
-  let &virtualedit = 'onemore'
-  if a:call_in_normal_mode
+function! operator_api#imap(callback, restore_cursor)
+  try
     call s:init_info(a:callback, 'i', 'n')
+    let s:saved['restore_cursor'] = a:restore_cursor
     set operatorfunc=operator_api#operatorfunc
+    let &virtualedit = 'onemore'
     return "\<c-o>g@"
-  else
-    call s:init_info(a:callback, 'i', 'i')
-    set operatorfunc=operator_api#operatorfunc_dummy
-    exe "normal! \<c-o>g@"
-    let l:F = function(a:callback)
-    return l:F(s:info)
-  endif
+  catch
+    throw 'operator imap: ' . v:exception
+  endtry
 endfunction
 function! operator_api#omap(callback)
   let samemap = v:operator == "g@"
@@ -123,40 +121,59 @@ let s:visual_mode = { 'char':'v', 'line': 'V', 'block': "\<c-v>"}
 function! operator_api#vmap(callback, call_in_normal_mode)
   if a:call_in_normal_mode
     call s:init_info(a:callback, 'v', 'n')
-    call s:setpos("<", ">", s:motion_wiseness[visualmode()])
+    call s:setpos("'<", "'>", s:motion_wiseness[visualmode()])
   else
     call s:init_info(a:callback, 'v', 'v')
     call s:setpos(".", "v", s:motion_wiseness[mode()])
+    let info = s:info
   endif
-  let l:F = function(a:callback)
-  return l:F(s:info)
+  try
+    let l:F = s:info.callback
+    let rv = l:F(s:info)
+    if type(rv) == v:t_string
+      return rv
+    else
+      return ''
+    endif
+  catch
+    throw printf('operator vmap: %s', v:exception)
+  finally
+    return ''
+  endtry
 endfunction
 
-function! operator_api#define(keyseq, callback, ...)
+function! operator_api#define(keyseq, callback, ...) abort
   let keyseq = a:keyseq
-  let funcname = string(a:callback)
-  let modes = get(a:000, 0, 'nvo')
-  if modes =~ '[nN]'
-    let propagate_count = modes =~ 'n'
-    execute printf('nnoremap <script> <silent> <expr> %s operator_api#nmap(%s, %d)', keyseq, funcname, propagate_count)
+  if type(a:callback) != v:t_string || type(function(a:callback)) != v:t_func
+    throw printf('define operator %s failed: callback %s is not a function', a:keyseq, a:callback)
   endif
-  if modes =~ 'o'
-    execute printf('onoremap <script> <silent> <expr> %s operator_api#omap(%s)', keyseq, funcname)
-  endif
-  if modes =~ '[iI]'
-    let call_in_normal_mode = modes =~ 'i'
-    execute printf('inoremap <script> <silent> <expr> %s operator_api#imap(%s, %d)', keyseq, funcname, call_in_normal_mode)
-  endif
-  if modes =~ '[vV]'
-    let call_in_normal_mode = modes =~ 'v'
-      " doesn't use <expr>, the function is called in normal mode
-    if call_in_normal_mode
-      execute printf('vnoremap <script> <silent> %s :<c-u>call operator_api#vmap(%s, 1)<cr>', keyseq, funcname)
-    else
-      " uses <expr>, the function is called in visual mode
-      execute printf('vnoremap <script> <silent> <expr> %s operator_api#vmap(%s, 0)<cr>', keyseq, funcname)
+  try
+    let funcname = string(a:callback)
+    let modes = get(a:000, 0, 'nvo')
+    if modes =~ '[nN]'
+      let propagate_count = modes =~ 'n'
+      execute printf('nnoremap <script> <silent> <expr> %s operator_api#nmap(%s, %d)', keyseq, funcname, propagate_count)
     endif
-  endif
+    if modes =~ 'o'
+      execute printf('onoremap <script> <silent> <expr> %s operator_api#omap(%s)', keyseq, funcname)
+    endif
+    if modes =~ '[iI]'
+      let restore_cursor = modes =~ 'I'
+      execute printf('inoremap <script> <silent> <expr> %s operator_api#imap(%s, %d)', keyseq, funcname, restore_cursor)
+    endif
+    if modes =~ '[vV]'
+      let call_in_normal_mode = modes =~ 'v'
+        " doesn't use <expr>, the function is called in normal mode
+      if call_in_normal_mode
+        execute printf('vnoremap <script> <silent> %s :<c-u>call operator_api#vmap(%s, %d)<cr>', keyseq, funcname, call_in_normal_mode)
+      else
+        " uses <expr>, the function is called in visual mode
+        execute printf('vnoremap <script> <silent> <expr> %s operator_api#vmap(%s, %d)', keyseq, funcname, call_in_normal_mode)
+      endif
+    endif
+  catch
+    throw printf('define operator %s failed: %s', a:keyseq, v:exception)
+  endtry
 endfunction
 
 
@@ -166,8 +183,8 @@ endfunction
 function! operator_api#default_callback(info)
   echo a:info
 endfunction
-call operator_api#define(';o', 'operator_api#default_callback', 'novi')
-call operator_api#define(';O', 'operator_api#default_callback', 'Novi')
+call operator_api#define(';o', 'operator_api#default_callback', 'nvio')
+call operator_api#define(';O', 'operator_api#default_callback', 'NVIo')
 
 " when will this happen?
 function! operator_api#is_empty_region(start, end)
