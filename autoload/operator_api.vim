@@ -29,8 +29,7 @@
 " Interface  "{{{1
 
 " augument the info dict with 'start', 'end' and 'motion_wiseness'
-function! s:setpos(startmark, endmark, motion_wiseness)
-  unlockvar s:info
+function! s:setpos(startmark, endmark, motion_wiseness, set_change_marks)
   let pos1 = getpos(a:startmark)
   let pos2 = getpos(a:endmark)
   if pos1[1] > pos2[1] || (pos1[1] == pos2[1] && pos1[2] > pos2[2])
@@ -40,8 +39,11 @@ function! s:setpos(startmark, endmark, motion_wiseness)
     let s:info['start'] = pos1
     let s:info['end'] = pos2
   endif
+  if a:set_change_marks
+    call setpos("'[", s:info['start'])
+    call setpos("']", s:info['end'])
+  endif
   let s:info['motion_wiseness'] = a:motion_wiseness
-  lockvar s:info
 endfunction
 
 "let g:oinfo = s:info
@@ -52,12 +54,11 @@ endfunction
 "
 " execute_mode: the mode the function is called
 " invoke_mode: the mode the mapping is invoked, (whether it is imap, omap...)
-function! s:init_info(callback, invoke_mode, execute_mode)
+function! s:init_info(callback, invoke_mode, execute_mode, extra)
   let s:saved = {
         \ 'virtualedit': &virtualedit,
         \ }
-  unlock! s:info
-  let s:info = {
+  let info = {
         \ 'callback' : function(a:callback),
         \ 'cursor': getpos("."),
         \ 'count': v:count,
@@ -66,16 +67,17 @@ function! s:init_info(callback, invoke_mode, execute_mode)
         \ 'invoke_mode': a:invoke_mode,
         \ 'execute_mode' : a:execute_mode,
         \ }
-  lockvar s:info
+  call extend(info, a:extra)
+  let s:info = info
 endfunction
 
 function! operator_api#operatorfunc(motion_wiseness) abort
   let l:F = s:info.callback
-  call s:setpos("'[", "']", a:motion_wiseness)
+  call s:setpos("'[", "']", a:motion_wiseness, 0)
   try
     call l:F(s:info)
   catch
-    throw 'operator nmap: ' . v:exception
+    Throw 'operator nmap'
   finally
     if s:info.invoke_mode == 'i' && s:saved.restore_cursor
       call cursor(s:info.cursor)
@@ -83,9 +85,9 @@ function! operator_api#operatorfunc(motion_wiseness) abort
     let &virtualedit = s:saved.virtualedit
   endtry
 endfunction
-function! operator_api#nmap(callback, propagate_count)
+function! operator_api#nmap(callback, propagate_count, extra)
   set operatorfunc=operator_api#operatorfunc
-  call s:init_info(a:callback, 'n', 'n')
+  call s:init_info(a:callback, 'n', 'n', a:extra)
   " because we are using <expr> mapping, the count inserted is still in the
   " typeahead buffer waiting to be processed
   " to cancel this count, use "@_" in normal/visual mode
@@ -95,9 +97,9 @@ function! operator_api#nmap(callback, propagate_count)
   "let count_str = count ? string(count) : ''
   return a:propagate_count ? "g@" : '@_g@'
 endfunction
-function! operator_api#imap(callback, restore_cursor)
+function! operator_api#imap(callback, restore_cursor, extra)
   try
-    call s:init_info(a:callback, 'i', 'n')
+    call s:init_info(a:callback, 'i', 'n', a:extra)
     let s:saved['restore_cursor'] = a:restore_cursor
     set operatorfunc=operator_api#operatorfunc
     let &virtualedit = 'onemore'
@@ -106,42 +108,48 @@ function! operator_api#imap(callback, restore_cursor)
     throw 'operator imap: ' . v:exception
   endtry
 endfunction
-function! operator_api#omap(callback)
+function! operator_api#omap(callback, forward, extra)
   let samemap = v:operator == "g@"
-        \  && (&operatorfunc == 'operator_api#operatorfunc'
-        \  || &operatorfunc == 'operator_api#operatorfunc_dummy')
+        \  && &operatorfunc == 'operator_api#operatorfunc'
         \  && s:info['callback'] == function(a:callback)
-  return samemap? 'g@' : "\<esc>"
+  if !samemap
+    return "\<esc>"
+  elseif a:forward || v:count1 == 1
+    return '_'
+  else
+    let rv = printf(":normal! %d-\<cr>", v:count1 - 1)
+    return rv
+  endif
 endfunction
 
 
 let s:motion_wiseness = {'v': 'char', 'V': 'line', "\<c-v>": 'block'}
 let s:visual_mode = { 'char':'v', 'line': 'V', 'block': "\<c-v>"}
 " this function is called in normal mode, since we didn't use <expr>-map
-function! operator_api#vmap(callback, call_in_normal_mode)
+function! operator_api#vmap(callback, call_in_normal_mode, extra)
   if a:call_in_normal_mode
-    call s:init_info(a:callback, 'v', 'n')
-    call s:setpos("'<", "'>", s:motion_wiseness[visualmode()])
+    call s:init_info(a:callback, 'v', 'n', a:extra)
+    call s:setpos("'<", "'>", s:motion_wiseness[visualmode()], 1)
   else
-    call s:init_info(a:callback, 'v', 'v')
-    call s:setpos(".", "v", s:motion_wiseness[mode()])
+    call s:init_info(a:callback, 'v', 'v', a:extra)
+    call s:setpos(".", "v", s:motion_wiseness[mode()], 1)
     let info = s:info
   endif
   try
     let l:F = s:info.callback
     let rv = l:F(s:info)
     if type(rv) == v:t_string
-      return rv
+      return '@_' . rv
     else
-      return ''
+      return '@_'
     endif
   catch
     throw printf('operator vmap: %s', v:exception)
-  finally
-    return ''
   endtry
 endfunction
 
+" optional: modes (default "nvo")
+" extra_options (a dict to passed to info)
 function! operator_api#define(keyseq, callback, ...) abort
   let keyseq = a:keyseq
   if type(a:callback) != v:t_string || type(function(a:callback)) != v:t_func
@@ -150,25 +158,35 @@ function! operator_api#define(keyseq, callback, ...) abort
   try
     let funcname = string(a:callback)
     let modes = get(a:000, 0, 'nvo')
+    let extra_options = get(a:000, 1, {})
+    if eval(string(extra_options)) != extra_options
+      throw 'extra_options cannot be used'
+    endif
     if modes =~ '[nN]'
       let propagate_count = modes =~ 'n'
-      execute printf('nnoremap <script> <silent> <expr> %s operator_api#nmap(%s, %d)', keyseq, funcname, propagate_count)
+      execute printf('nnoremap <script> <silent> <expr> %s operator_api#nmap(%s, %d, %s)',
+            \  keyseq, funcname, propagate_count, extra_options)
     endif
-    if modes =~ 'o'
-      execute printf('onoremap <script> <silent> <expr> %s operator_api#omap(%s)', keyseq, funcname)
+    if modes =~ '[oO]'
+      let forward = modes =~ 'o'
+      execute printf('onoremap <script> <silent> <expr> %s operator_api#omap(%s, %d, %s)',
+            \  keyseq, funcname, forward, extra_options)
     endif
     if modes =~ '[iI]'
       let restore_cursor = modes =~ 'I'
-      execute printf('inoremap <script> <silent> <expr> %s operator_api#imap(%s, %d)', keyseq, funcname, restore_cursor)
+      execute printf('inoremap <script> <silent> <expr> %s operator_api#imap(%s, %d, %s)',
+            \  keyseq, funcname, restore_cursor, extra_options)
     endif
     if modes =~ '[vV]'
       let call_in_normal_mode = modes =~ 'v'
         " doesn't use <expr>, the function is called in normal mode
       if call_in_normal_mode
-        execute printf('vnoremap <script> <silent> %s :<c-u>call operator_api#vmap(%s, %d)<cr>', keyseq, funcname, call_in_normal_mode)
+        execute printf('vnoremap <script> <silent> %s :<c-u>call operator_api#vmap(%s, %d, %s)<cr>',
+              \  keyseq, funcname, call_in_normal_mode, extra_options)
       else
         " uses <expr>, the function is called in visual mode
-        execute printf('vnoremap <script> <silent> <expr> %s operator_api#vmap(%s, %d)', keyseq, funcname, call_in_normal_mode)
+        execute printf('vnoremap <script> <silent> <expr> %s operator_api#vmap(%s, %d, %s)',
+              \  keyseq, funcname, call_in_normal_mode, extra_options)
       endif
     endif
   catch
@@ -184,7 +202,7 @@ function! operator_api#default_callback(info)
   echo a:info
 endfunction
 call operator_api#define(';o', 'operator_api#default_callback', 'nvio')
-call operator_api#define(';O', 'operator_api#default_callback', 'NVIo')
+call operator_api#define(';O', 'operator_api#default_callback', 'NVIO')
 
 " when will this happen?
 function! operator_api#is_empty_region(start, end)
@@ -197,21 +215,24 @@ function! operator_api#is_empty_region(start, end)
   return start[1] == end[1] && end[2] < start[2]
 endfunction
 
-function! operator_api#visual_select() abort
+function! operator_api#visual_select(...) abort
   let invoke_mode = s:info.invoke_mode
   let execute_mode = s:info.execute_mode
+  let keystrokes = get(a:000, 0, '')
   if invoke_mode == 'v'
     if execute_mode == 'n'
-      normal! gv
+      exe printf('normal! gv%s', keystrokes)
     else
+      2Log '-----------'
+      return keystrokes
       " already in visual mode
     endif
   elseif execute_mode == 'n'
     let vmode = s:visual_mode[s:info['motion_wiseness']]
-    exe printf('normal! `[%s`]', vmode)
+    exe printf('normal! `[%s`]%s', vmode, keystrokes)
   elseif execute_mode == 'i'
     let vmode = s:visual_mode[s:info['motion_wiseness']]
-    exe printf("normal! \<c-o>`[%s`]", vmode)
+    exe printf("normal! \<c-o>`[%s`]%s", vmode, keystrokes)
   endif
 endfunction
 
