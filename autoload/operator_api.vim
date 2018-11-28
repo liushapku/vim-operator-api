@@ -28,31 +28,6 @@
 " }}}
 " Interface  "{{{1
 
-function! operator_api#visual_select(...) abort
-  let invoke_mode = s:info.invoke_mode
-  let keystrokes = get(a:000, 0, '')
-  let vmode = s:visual_mode[s:info['motion_wiseness']]
-  if s:info.empty
-    call setpos("'<", [0, 0, 0, 0])
-    call setpos("'>", [0, 0, 0, 0])
-    exe printf('normal! gv%s', keystrokes)
-  else
-    exe printf('normal! `[%s`]%s', vmode, keystrokes)
-  endif
-  return
-
-  if invoke_mode == 'v'
-    exe printf('normal! gv%s', keystrokes)
-  elseif execute_mode == 'n'
-    let vmode = s:visual_mode[s:info['motion_wiseness']]
-    exe printf('normal! `[%s`]%s', vmode, keystrokes)
-  elseif execute_mode == 'i'
-    let vmode = s:visual_mode[s:info['motion_wiseness']]
-    exe printf("normal! \<c-o>`[%s`]%s", vmode, keystrokes)
-  endif
-endfunction
-
-
 " augument the info dict with 'start', 'end' and 'motion_wiseness'
 function! s:setpos(startmark, endmark, motion_wiseness, invoke_mode)
   let pos1 = getpos(a:startmark)
@@ -80,6 +55,7 @@ function! s:setpos(startmark, endmark, motion_wiseness, invoke_mode)
     endif
     let s:info['start'] = pos1
     let s:info['end'] = pos2
+    let s:info['End'] = pos2
     call setpos("'[", pos1)
     call setpos("']", pos2)
     let s:info['empty'] = 0  " visual mode will never be empty
@@ -89,10 +65,12 @@ function! s:setpos(startmark, endmark, motion_wiseness, invoke_mode)
     " If an empty region is given to g@, '[ and '] are set to the same line, but
     " '[ is placed after '].
     " see https://github.com/kana/vim-operator-replace/issues/2
-    let s:info['start'] = pos1
-    let s:info['end'] = pos2
-    2Log pos1 pos2
     let s:info['empty'] = pos1[1] == pos2[1] && pos1[2] > pos2[2]
+    let s:info['start'] = pos1
+    let s:info['End'] = pos2
+    if !s:info['empty']
+      let s:info['end'] = pos2
+    endif
   endif
   let s:info['motion_wiseness'] = a:motion_wiseness
 endfunction
@@ -123,19 +101,21 @@ function! s:init_info(callback, invoke_mode, extra)
 endfunction
 
 function! operator_api#operatorfunc(motion_wiseness) abort
-  let l:F = s:info.callback
+  let l:Func = s:info.callback
   call s:setpos("'[", "']", a:motion_wiseness, s:info.invoke_mode)
   try
-    call l:F(s:info)
+    let rv = l:Func(s:info)
+    if type(rv) == v:t_list
+      call setpos('.', rv)
+    endif
   catch
-    Throw 'operator nmap'
+    throw 'operator nmap: ' . v:exception
   finally
     let &virtualedit = s:saved.virtualedit
     if s:info.invoke_mode == 'i' && s:saved.restore_cursor
       if s:info.buf != bufnr('%')
         exe 'b' s:info.buf
       endif
-      let prev_pos = getpos("'^")
       " call cursor() does not work
       call setpos('.', getpos("'^"))
     endif
@@ -149,8 +129,8 @@ endfunction
 function! operator_api#_nmap(callback, propagate_count, extra)
   set operatorfunc=operator_api#operatorfunc
   call s:init_info(a:callback, 'n', a:extra)
-  let cancel = a:propagate_count ? "" : '@_'
-  return cancel . "g@"
+  let cancel = a:propagate_count ? '' : '@_'
+  return cancel . 'g@'
 endfunction
 
 let s:motion_wiseness = {'v': 'char', 'V': 'line', "\<c-v>": 'block'}
@@ -163,16 +143,19 @@ function! operator_api#_vmap(funcname, count, extra_options)
     call s:init_info(Callback, 'v', a:extra_options)
     call s:setpos("'<", "'>", s:motion_wiseness[visualmode()], 'v')
     try
-      call Callback(s:info)
+      let rv = Callback(s:info)
+      if type(rv) == v:t_list
+        call setpos('.', rv)
+      endif
     catch
-      Throw 'operator vmap'
+      throw 'operator vmap: ' . v:exception
     endtry
   elseif a:count == 0
     " this part is called in <expr> mode for the case propagate_count == 0
     return command
   else
     " this part is called in <expr> mode for the case propagate_count == 1
-    return printf(":call operator_api#noop()\<cr>%sv%s", a:count, command)
+    return printf(":\<cr>%sv%s", a:count, command)
   endif
 endfunction
 
@@ -188,7 +171,7 @@ function! operator_api#_imap(callback, restore_cursor, extra)
   endtry
 endfunction
 function! operator_api#_omap(callback, forward, extra)
-  let samemap = v:operator == "g@"
+  let samemap = v:operator == 'g@'
         \  && &operatorfunc == 'operator_api#operatorfunc'
         \  && s:info['callback'] == function(a:callback)
   if !samemap
@@ -241,15 +224,20 @@ function! operator_api#define(keyseq, callback, ...) abort
   endtry
 endfunction
 
-
+" other helper functions
 function! operator_api#default_map(name)
   return '<Plug>(operator-api-' . a:name . ')'
 endfunction
 function! operator_api#default_callback(info)
   echo a:info
+  if a:info.type == 'o'
+    return a:info.End
+  else
+    return a:info.start
+  endif
 endfunction
-call operator_api#define(';o', 'operator_api#default_callback', 'nvio')
-call operator_api#define(';O', 'operator_api#default_callback', 'NVIO')
+call operator_api#define(';o', 'operator_api#default_callback', 'nvio', {'type': 'o'})
+call operator_api#define(';O', 'operator_api#default_callback', 'NVIO', {'type': 'O'})
 
 function! operator_api#selection()
   if s:info.empty
@@ -276,6 +264,9 @@ function! operator_api#selection()
 endfunction
 
 function! operator_api#deletion_moves_cursor()
+  if s:info.empty
+    return 0
+  endif
   let motion_wiseness = s:info.motion_wiseness
   let motion_end_pos = s:info.end
   let [buffer_end_line, buffer_end_col] = [line('$'), len(getline('$'))]
@@ -296,12 +287,20 @@ function! operator_api#deletion_moves_cursor()
   endif
 endfunction
 
-function! operator_api#noop() range
+function! operator_api#visual_select(...) abort
+  let invoke_mode = s:info.invoke_mode
+  let keystrokes = get(a:000, 0, '')
+  let motion_wiseness = get(a:000, 1, s:info['motion_wiseness'])
+  if s:info.empty && motion_wiseness != 'line'
+    call setpos("'<", [0, 0, 0, 0])
+    call setpos("'>", [0, 0, 0, 0])
+    throw 'empty region in v-char/v-block mode is not allowed'
+  else
+    let vmode = s:visual_mode[motion_wiseness]
+    exe printf('normal! `[%s`]%s', vmode, keystrokes)
+  endif
+  return
 endfunction
-" this mapping do nothing but records the last visual area so that the
-" next [count]v will select the corresponding area multiplied by count times
-" (see :h v for [count]v)
-vmap <silent> <Plug>(operator-api-noop) :call operator_api#noop()<cr>
 
 " __END__  "{{{1
 " vim: foldmethod=marker
