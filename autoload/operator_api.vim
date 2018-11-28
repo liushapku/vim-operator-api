@@ -28,9 +28,9 @@
 " }}}
 " Interface  "{{{1
 
-" augument the info dict with 'start', 'end' and 'motion_wiseness'
-function! s:set_pos(startmark, endmark, motion_wiseness)
-  let pos1 = getpos(a:startmark)
+" augument the info dict with 'begin', 'end' and 'motion_wiseness'
+function! s:set_pos(beginmark, endmark, motion_wiseness)
+  let pos1 = getpos(a:beginmark)
   let pos2 = getpos(a:endmark)
 
   if s:info.invoke_mode == 'v'
@@ -53,7 +53,7 @@ function! s:set_pos(startmark, endmark, motion_wiseness)
         let pos2 = pos1
       endif
     endif
-    let s:info['start'] = pos1
+    let s:info['begin'] = pos1
     let s:info['end'] = pos2
     let s:info['End'] = pos2
     call setpos("'[", pos1)
@@ -66,7 +66,7 @@ function! s:set_pos(startmark, endmark, motion_wiseness)
     " '[ is placed after '].
     " see https://github.com/kana/vim-operator-replace/issues/2
     let s:info['empty'] = pos1[1] == pos2[1] && pos1[2] > pos2[2]
-    let s:info['start'] = pos1
+    let s:info['begin'] = pos1
     let s:info['End'] = pos2
     if !s:info['empty']
       let s:info['end'] = pos2
@@ -79,7 +79,7 @@ endfunction
 
 " mode: i for imap, v for vmap, n for nmap
 " (omap does not call this function)
-" the returned dict will be augumented with 'start', 'end' and 'motion_wiseness'
+" the returned dict will be augumented with 'begin', 'end' and 'motion_wiseness'
 "
 " execute_mode: the mode the function is called
 " invoke_mode: the mode the mapping is invoked, (whether it is imap, omap...)
@@ -233,7 +233,7 @@ function! operator_api#default_callback(info)
   if a:info.type == 'o'
     return a:info.End
   else
-    return a:info.start
+    return a:info.begin
   endif
 endfunction
 call operator_api#define(';o', 'operator_api#default_callback', 'nvio', {'type': 'o'})
@@ -243,7 +243,7 @@ function! operator_api#selection()
   if s:info.empty
     return []
   endif
-  let [l1, c1] = s:info.start[1:2]
+  let [l1, c1] = s:info.begin[1:2]
   let [l2, c2] = s:info.end[1:2]
   let mode = s:info.motion_wiseness
   let lines = getline(l1, l2)
@@ -289,11 +289,10 @@ endfunction
 
 " optional:
 " 1. the normal mode keys to send after entering visual
-" 2. motion_wiseness to override the current motion_wiseness
 function! operator_api#visual_select(...) abort
   let invoke_mode = s:info.invoke_mode
   let keystrokes = get(a:000, 0, '')
-  let motion_wiseness = get(a:000, 1, s:info['motion_wiseness'])
+  let motion_wiseness = s:info['motion_wiseness']
   if s:info.empty && motion_wiseness != 'line'
     call setpos("'<", [0, 0, 0, 0])
     call setpos("'>", [0, 0, 0, 0])
