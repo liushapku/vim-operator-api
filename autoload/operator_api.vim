@@ -29,11 +29,11 @@
 " Interface  "{{{1
 
 " augument the info dict with 'start', 'end' and 'motion_wiseness'
-function! s:setpos(startmark, endmark, motion_wiseness, invoke_mode)
+function! s:set_pos(startmark, endmark, motion_wiseness)
   let pos1 = getpos(a:startmark)
   let pos2 = getpos(a:endmark)
 
-  if a:invoke_mode == 'v'
+  if s:info.invoke_mode == 'v'
     " exclusive needs special treatment
     if &selection == 'exclusive'
       if a:motion_wiseness == 'char'
@@ -102,7 +102,7 @@ endfunction
 
 function! operator_api#operatorfunc(motion_wiseness) abort
   let l:Func = s:info.callback
-  call s:setpos("'[", "']", a:motion_wiseness, s:info.invoke_mode)
+  call s:set_pos("'[", "']", a:motion_wiseness)
   try
     let rv = l:Func(s:info)
     if type(rv) == v:t_list
@@ -129,7 +129,7 @@ endfunction
 function! operator_api#_nmap(callback, propagate_count, extra)
   set operatorfunc=operator_api#operatorfunc
   call s:init_info(a:callback, 'n', a:extra)
-  let cancel = a:propagate_count ? '' : '@_'
+  let cancel = a:propagate_count ? '' : "\<esc>"
   return cancel . 'g@'
 endfunction
 
@@ -141,7 +141,7 @@ function! operator_api#_vmap(funcname, count, extra_options)
     " this part is called in normal mode, by the command defined above
     let Callback = function(a:funcname)
     call s:init_info(Callback, 'v', a:extra_options)
-    call s:setpos("'<", "'>", s:motion_wiseness[visualmode()], 'v')
+    call s:set_pos("'<", "'>", s:motion_wiseness[visualmode()])
     try
       let rv = Callback(s:info)
       if type(rv) == v:t_list
@@ -287,6 +287,9 @@ function! operator_api#deletion_moves_cursor()
   endif
 endfunction
 
+" optional:
+" 1. the normal mode keys to send after entering visual
+" 2. motion_wiseness to override the current motion_wiseness
 function! operator_api#visual_select(...) abort
   let invoke_mode = s:info.invoke_mode
   let keystrokes = get(a:000, 0, '')
