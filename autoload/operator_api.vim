@@ -85,10 +85,9 @@ endfunction
 "
 " execute_mode: the mode the function is called
 " invoke_mode: the mode the mapping is invoked, (whether it is imap, omap...)
-function! s:init_info(callback, invoke_mode, define_mode, extra)
-  let s:saved = {
-        \ 'virtualedit': &virtualedit,
-        \ }
+function! s:init_info(callback, invoke_mode, define_mode, extra, hidden)
+  let s:saved = copy(a:hidden)
+  let s:saved['virtualedit'] = &virtualedit
   let info = {
         \ 'callback' : function(a:callback),
         \ 'curpos': getcurpos(),
@@ -163,15 +162,15 @@ endfunction
 " typeahead buffer waiting to be processed
 " to cancel this count, use "@_" in normal/visual mode
 " In operator-pending mode, this count is not cancellable
-function! operator_api#_nmap(callback, define_mode, extra)
+function! operator_api#_nmap(callback, define_mode, extra, hidden)
   set operatorfunc=operator_api#operatorfunc
-  call s:init_info(a:callback, 'n', a:define_mode, a:extra)
+  call s:init_info(a:callback, 'n', a:define_mode, a:extra, a:hidden)
   let cancel = a:define_mode == 'n' ? '' : "\<esc>"
   return cancel . 'g@'
 endfunction
-function! operator_api#_imap(callback, deifne_mode, extra)
+function! operator_api#_imap(callback, deifne_mode, extra, hidden)
   try
-    call s:init_info(a:callback, 'i', a:define_mode, a:extra)
+    call s:init_info(a:callback, 'i', a:define_mode, a:extra, a:hidden)
     set operatorfunc=operator_api#operatorfunc
     let &virtualedit = 'onemore'
     return "\<c-o>g@"
@@ -179,30 +178,31 @@ function! operator_api#_imap(callback, deifne_mode, extra)
     Throw 'operator imap'
   endtry
 endfunction
-function! operator_api#_omap(callback, define_mode, extra)
+function! operator_api#_omap(callback, define_mode, extra, hidden)
   let samemap = v:operator == 'g@'
         \  && &operatorfunc == 'operator_api#operatorfunc'
         \  && s:info['callback'] == function(a:callback)
+        \  && (s:info['callback'] != function('operator_api#_vmap_wrapper') ||
+        \  s:saved['vmapto'] == get(a:hidden, 'vmapto', ''))
   if !samemap
     return "\<esc>"
   elseif v:count1 == 1 || a:define_mode == 'o'
     return '_'
   else
-    let rv = printf(":normal! %d-\<cr>", v:count1 - 1)
-    return rv
+    return printf(":normal! %d-\<cr>", v:count1 - 1)
   endif
 endfunction
-function! operator_api#_vmap(callback, define_mode, extra)
+function! operator_api#_vmap(callback, define_mode, extra, hidden)
   set operatorfunc=operator_api#operatorfunc
-  call s:init_info(a:callback, 'v', a:define_mode, a:extra)
+  call s:init_info(a:callback, 'v', a:define_mode, a:extra, a:hidden)
   let select = a:define_mode == 'V'? printf('`<%dv', v:count1): 'gv'
   return printf(":\<cr>g@:normal! %s\<cr>", select)
 endfunction
 
-function! s:define(keyseq, Callback, extra, mode, define_mode)
-  let command = printf('%snoremap <silent> <expr> %s operator_api#_%smap(%s, %s, %s)',
-        \ a:mode, a:keyseq, a:mode, string(a:Callback), string(a:define_mode), a:extra)
-  2Log command
+function! s:define(keyseq, Callback, extra, hidden, mode, define_mode)
+  let template = '%snoremap <silent> <expr> %s operator_api#_%smap(%s, %s, %s, %s)'
+  let command = printf(template, a:mode, a:keyseq, a:mode, 
+        \  string(a:Callback), string(a:define_mode), a:extra, a:hidden)
   exe command
 endfunction
 
@@ -210,18 +210,15 @@ endfunction
 " extra_options (a dict to passed to info)
 function! operator_api#define(keyseq, callback, ...) abort
   let keyseq = a:keyseq
-  if type(a:callback) == v:t_string
-    let Callback = function(a:callback)
-  elseif type(a:callback) == v:t_func
-    let Callback = a:callback
-  else
+  if type(a:callback) != v:t_string && type(a:callback) == v:t_func
     Throw printf('define operator %s failed: callback %s is not a function', a:keyseq, a:callback)
   endif
   try
     let modes = get(a:000, 0, 'nvo')
     let extra_options = get(a:000, 1, {})
-    let l:Define = {mode, define_mode -> 
-          \ s:define(a:keyseq, Callback, extra_options, mode, define_mode)}
+    let hidden_options = get(a:000, 2, {})
+    let l:Define = {mode, define_mode -> s:define(a:keyseq, a:callback, 
+          \  extra_options, hidden_options, mode, define_mode)}
     if eval(string(extra_options)) != extra_options
       Throw 'extra_options cannot be used'
     endif
@@ -258,8 +255,8 @@ function! operator_api#define(keyseq, callback, ...) abort
 endfunction
 
 function! operator_api#_vmap_wrapper(info)
-  let remap = get(a:info, 'remap', 0)
-  let mapto = remove(a:info, '_vmap_')
+  let remap = s:saved['remap']
+  let mapto = s:saved['vmapto']
   if a:info.define_mode == 'N' || a:info.define_mode == 'v'
     let count = string(a:info.count1)
   else
@@ -269,9 +266,9 @@ function! operator_api#_vmap_wrapper(info)
 endfunction
 function! operator_api#from_vmap(keyseq, mapto, ...) abort
   let modes = get(a:000, 0, 'nvo')
-  let extra = get(a:000, 1, {})
-  let extra['_vmap_'] = a:mapto
-  let args = [a:keyseq, 'operator_api#_vmap_wrapper', modes, extra]
+  let remap = get(a:000, 1, 1)
+  let hidden = {'vmapto': a:mapto, 'remap': remap}
+  let args = [a:keyseq, 'operator_api#_vmap_wrapper', modes, {}, hidden]
   call call('operator_api#define', args)
 endfunction
 
@@ -350,6 +347,12 @@ function! operator_api#visual_select(...) abort
   endif
   return
 endfunction
+
+"""""""""""" Examples
+
+call operator_api#from_vmap(';>', '>', 'NovI')
+call operator_api#from_vmap(';<', '<', 'NovI')
+call operator_api#from_vmap('<f9>', '<Plug>NERDCommenterToggle', 'novi')
 
 " __END__  "{{{1
 " vim: foldmethod=marker
