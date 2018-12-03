@@ -350,8 +350,8 @@ endfunction
 
 """""""""""" Examples
 
-call operator_api#from_vmap(';>', '>', 'NovI')
-call operator_api#from_vmap(';<', '<', 'NovI')
+call operator_api#from_vmap(';>', '>', 'NovI', 0)
+call operator_api#from_vmap(';<', '<', 'NovI', 0)
 call operator_api#from_vmap('<f9>', '<Plug>NERDCommenterToggle', 'novi')
 
 " __END__  "{{{1
