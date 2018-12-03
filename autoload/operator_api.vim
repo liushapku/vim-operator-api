@@ -254,19 +254,21 @@ function! operator_api#define(keyseq, callback, ...) abort
   endtry
 endfunction
 
-function! operator_api#_vmap_wrapper(mapto, info)
+function! operator_api#_vmap_wrapper(info)
   let remap = get(a:info, 'remap', 0)
-  2Log a:info v:count1
+  let mapto = remove(a:info, '_vmap_')
   if a:info.define_mode == 'N' || a:info.define_mode == 'v'
     let count = string(a:info.count1)
   else
     let count = ''
   endif
-  call operator_api#visual_select(count . a:mapto, remap)
+  call operator_api#visual_select(count . mapto, remap)
 endfunction
 function! operator_api#from_vmap(keyseq, mapto, ...) abort
-  let l:Func = function('operator_api#_vmap_wrapper', [a:mapto])
-  let args = [a:keyseq, l:Func] + a:000
+  let modes = get(a:000, 0, 'nvo')
+  let extra = get(a:000, 1, {})
+  let extra['_vmap_'] = a:mapto
+  let args = [a:keyseq, 'operator_api#_vmap_wrapper', modes, extra]
   call call('operator_api#define', args)
 endfunction
 
