@@ -199,6 +199,13 @@ function! operator_api#_vmap(callback, define_mode, extra)
   return printf(":\<cr>g@:normal! %s\<cr>", select)
 endfunction
 
+function! s:define(keyseq, Callback, extra, mode, define_mode)
+  let command = printf('%snoremap <silent> <expr> %s operator_api#_%smap(%s, %s, %s)',
+        \ a:mode, a:keyseq, a:mode, string(a:Callback), string(a:define_mode), a:extra)
+  2Log command
+  exe command
+endfunction
+
 " optional: modes (default "nvo")
 " extra_options (a dict to passed to info)
 function! operator_api#define(keyseq, callback, ...) abort
@@ -211,9 +218,10 @@ function! operator_api#define(keyseq, callback, ...) abort
     Throw printf('define operator %s failed: callback %s is not a function', a:keyseq, a:callback)
   endif
   try
-    let Callback = string(Callback)
     let modes = get(a:000, 0, 'nvo')
     let extra_options = get(a:000, 1, {})
+    let l:Define = {mode, define_mode -> 
+          \ s:define(a:keyseq, Callback, extra_options, mode, define_mode)}
     if eval(string(extra_options)) != extra_options
       Throw 'extra_options cannot be used'
     endif
@@ -223,8 +231,7 @@ function! operator_api#define(keyseq, callback, ...) abort
       "otherwise, count for nmap is handled by op and count for omap is
       "handled by motion
       let define_mode = modes =~ 'n'? 'n': 'N'
-      execute printf('nnoremap <silent> <expr> %s operator_api#_nmap(%s, %s, %s)',
-            \  keyseq, Callback, string(define_mode), extra_options)
+      call l:Define('n', define_mode)
     endif
     if modes =~ '[vV]'
       "if propagate_count, count for vmap is to redefine the text to be
@@ -232,22 +239,18 @@ function! operator_api#define(keyseq, callback, ...) abort
       "the selected region. The predefined operators like d and y behaves as
       "modes == 'v', and the count for 'v' is discarded
       let define_mode = modes =~ 'v'? 'v': 'V'
-      execute printf('vnoremap <silent> <expr> %s operator_api#_vmap(%s, %s, %s)',
-            \  keyseq, Callback, string(define_mode), extra_options)
+      call l:Define('v', define_mode)
     endif
     if modes =~ '[iI]'
       " count in i mode always affects motion
-      let restore_cursor = modes =~ 'I'
       let define_mode = modes =~ 'i'? 'i': 'I'
-      execute printf('inoremap <silent> <expr> %s operator_api#_imap(%s, %s, %s)',
-            \  keyseq, Callback, string(define_mode), extra_options)
+      call l:Define('i', define_mode)
     endif
     if modes =~ '[oO]'
       " count in o mode always affects motion
       " mode O select n lines backward
       let define_mode = modes =~ 'o'? 'o': 'O'
-      execute printf('onoremap <silent> <expr> %s operator_api#_omap(%s, %s, %s)',
-            \  keyseq, Callback, string(define_mode), extra_options)
+      call l:Define('o', define_mode)
     endif
   catch
     Throw printf('define operator %s failed', a:keyseq)
