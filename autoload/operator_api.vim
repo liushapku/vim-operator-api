@@ -85,7 +85,7 @@ endfunction
 "
 " execute_mode: the mode the function is called
 " invoke_mode: the mode the mapping is invoked, (whether it is imap, omap...)
-function! s:init_info(callback, invoke_mode, extra)
+function! s:init_info(callback, invoke_mode, define_mode, extra)
   let s:saved = {
         \ 'virtualedit': &virtualedit,
         \ }
@@ -96,6 +96,7 @@ function! s:init_info(callback, invoke_mode, extra)
         \ 'count1': v:count1,
         \ 'register': v:register,
         \ 'invoke_mode': a:invoke_mode,
+        \ 'define_mode': a:define_mode,
         \ 'buf': bufnr('%'),
         \ }
   call extend(info, a:extra)
@@ -162,15 +163,15 @@ endfunction
 " typeahead buffer waiting to be processed
 " to cancel this count, use "@_" in normal/visual mode
 " In operator-pending mode, this count is not cancellable
-function! operator_api#_nmap(callback, extra)
+function! operator_api#_nmap(callback, define_mode, extra)
   set operatorfunc=operator_api#operatorfunc
-  call s:init_info(a:callback, 'n', a:extra)
-  let cancel = a:extra.define_mode == 'n' ? '' : "\<esc>"
+  call s:init_info(a:callback, 'n', a:define_mode, a:extra)
+  let cancel = a:define_mode == 'n' ? '' : "\<esc>"
   return cancel . 'g@'
 endfunction
-function! operator_api#_imap(callback, extra)
+function! operator_api#_imap(callback, deifne_mode, extra)
   try
-    call s:init_info(a:callback, 'i', a:extra)
+    call s:init_info(a:callback, 'i', a:define_mode, a:extra)
     set operatorfunc=operator_api#operatorfunc
     let &virtualedit = 'onemore'
     return "\<c-o>g@"
@@ -178,23 +179,23 @@ function! operator_api#_imap(callback, extra)
     Throw 'operator imap'
   endtry
 endfunction
-function! operator_api#_omap(callback, extra)
+function! operator_api#_omap(callback, define_mode, extra)
   let samemap = v:operator == 'g@'
         \  && &operatorfunc == 'operator_api#operatorfunc'
         \  && s:info['callback'] == function(a:callback)
   if !samemap
     return "\<esc>"
-  elseif v:count1 == 1 || a:extra.define_mode == 'o'
+  elseif v:count1 == 1 || a:define_mode == 'o'
     return '_'
   else
     let rv = printf(":normal! %d-\<cr>", v:count1 - 1)
     return rv
   endif
 endfunction
-function! operator_api#_vmap(callback, extra)
+function! operator_api#_vmap(callback, define_mode, extra)
   set operatorfunc=operator_api#operatorfunc
-  call s:init_info(a:callback, 'v', a:extra)
-  let select = a:extra.define_mode == 'V'? printf('`<%dv', v:count1): 'gv'
+  call s:init_info(a:callback, 'v', a:define_mode, a:extra)
+  let select = a:define_mode == 'V'? printf('`<%dv', v:count1): 'gv'
   return printf(":\<cr>g@:normal! %s\<cr>", select)
 endfunction
 
@@ -221,32 +222,32 @@ function! operator_api#define(keyseq, callback, ...) abort
       "define motion
       "otherwise, count for nmap is handled by op and count for omap is
       "handled by motion
-      let extra_options['define_mode'] = modes =~ 'n'? 'n': 'N'
-      execute printf('nnoremap <silent> <expr> %s operator_api#_nmap(%s, %s)',
-            \  keyseq, Callback, extra_options)
+      let define_mode = modes =~ 'n'? 'n': 'N'
+      execute printf('nnoremap <silent> <expr> %s operator_api#_nmap(%s, %s, %s)',
+            \  keyseq, Callback, string(define_mode), extra_options)
     endif
     if modes =~ '[vV]'
       "if propagate_count, count for vmap is to redefine the text to be
       "operated on, so 3xx will operator an area that is 3 times as largs as
       "the selected region. The predefined operators like d and y behaves as
       "modes == 'v', and the count for 'v' is discarded
-      let extra_options['define_mode'] = modes =~ 'v'? 'v': 'V'
-      execute printf('vnoremap <silent> <expr> %s operator_api#_vmap(%s, %s)',
-            \  keyseq, Callback, extra_options)
+      let define_mode = modes =~ 'v'? 'v': 'V'
+      execute printf('vnoremap <silent> <expr> %s operator_api#_vmap(%s, %s, %s)',
+            \  keyseq, Callback, string(define_mode), extra_options)
     endif
     if modes =~ '[iI]'
       " count in i mode always affects motion
       let restore_cursor = modes =~ 'I'
-      let extra_options['define_mode'] = modes =~ 'i'? 'i': 'I'
-      execute printf('inoremap <silent> <expr> %s operator_api#_imap(%s, %s)',
-            \  keyseq, Callback, extra_options)
+      let define_mode = modes =~ 'i'? 'i': 'I'
+      execute printf('inoremap <silent> <expr> %s operator_api#_imap(%s, %s, %s)',
+            \  keyseq, Callback, string(define_mode), extra_options)
     endif
     if modes =~ '[oO]'
       " count in o mode always affects motion
       " mode O select n lines backward
-      let extra_options['define_mode'] = modes =~ 'o'? 'o': 'O'
-      execute printf('onoremap <silent> <expr> %s operator_api#_omap(%s, %s)',
-            \  keyseq, Callback, extra_options)
+      let define_mode = modes =~ 'o'? 'o': 'O'
+      execute printf('onoremap <silent> <expr> %s operator_api#_omap(%s, %s, %s)',
+            \  keyseq, Callback, string(define_mode), extra_options)
     endif
   catch
     Throw printf('define operator %s failed', a:keyseq)
@@ -254,9 +255,14 @@ function! operator_api#define(keyseq, callback, ...) abort
 endfunction
 
 function! operator_api#_vmap_wrapper(mapto, info)
-  if a:info.invoke_mode == 'n' &&
   let remap = get(a:info, 'remap', 0)
-  call operator_api#visual_select(a:mapto, remap)
+  2Log a:info v:count1
+  if a:info.define_mode == 'N' || a:info.define_mode == 'v'
+    let count = string(a:info.count1)
+  else
+    let count = ''
+  endif
+  call operator_api#visual_select(count . a:mapto, remap)
 endfunction
 function! operator_api#from_vmap(keyseq, mapto, ...) abort
   let l:Func = function('operator_api#_vmap_wrapper', [a:mapto])
