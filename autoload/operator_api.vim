@@ -134,16 +134,16 @@ function! s:adjust_cursor()
   let info = s:info
   if info.motion_direction =~? '^back'
     let line = info.end[1]
-    let change = 'begin'
+    let change = 'before'
   elseif info.motion_direction =~? '^for'
     let line = info.begin[1]
-    let change = 'end'
+    let change = 'after'
   else  " enclose or empty
     let line = info.curpos[1]
     let change = ''
   endif
-  let change = get(info, 'change_at', change)
-  if change == 'begin'
+  let change = get(info, 'change_pos', change)
+  if change == 'before'
     let col = info.curpos[2] + len(getline(line)) - info.length
   elseif change == 'both'
     let col = info.curpos[2] + (len(getline(line)) - info.length)/2
@@ -205,7 +205,9 @@ function! operator_api#operatorfunc(motion_wiseness) abort
   catch
     Throw 'operator nmap'
   finally
-    let &virtualedit = s:meta.virtualedit
+    if s:info.invoke_mode == 'i'
+      call operator_api#_imap_restore()
+    endif
     if s:info.define_mode == 'I'
       if s:info.buf != bufnr('%')
         exe 'b' s:info.buf
@@ -230,6 +232,11 @@ function! operator_api#_nmap(callback, define_mode, extra, hidden)
   let cancel = a:define_mode == 'n' ? '' : printf("\<esc>".'"%s', s:info.register)
   return cancel . 'g@'
 endfunction
+function! operator_api#_imap_restore()
+  let &virtualedit = s:meta.virtualedit
+  ounmap  <esc>
+  return "\<esc>"
+endfunction
 function! operator_api#_imap(callback, define_mode, extra, hidden)
   " not register and not count can be entered for the op
   " the motion can have a count
@@ -237,6 +244,8 @@ function! operator_api#_imap(callback, define_mode, extra, hidden)
     call s:init_info(a:callback, 'i', a:define_mode, a:extra, a:hidden)
     set operatorfunc=operator_api#operatorfunc
     let &virtualedit = 'onemore'
+    " if operator is cancelled, we need to restore virtualedit
+    onoremap  <expr> <esc> operator_api#_imap_restore()
     return "\<c-o>g@"
   catch
     Throw 'operator imap'
