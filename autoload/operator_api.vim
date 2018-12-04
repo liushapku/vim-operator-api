@@ -31,11 +31,24 @@
 " augument the info dict with 'begin', 'end' and 'motion_wiseness'
 let s:motion_wiseness = {'v': 'char', 'V': 'line', "\<c-v>": 'block'}
 let s:visual_mode = { 'char':'v', 'line': 'V', 'block': "\<c-v>"}
+function! s:compare_pos(pos1, pos2)
+  if a:pos1[1] < a:pos2[1]
+    return -1
+  elseif a:pos1[1] > a:pos2[1]
+    return 1
+  elseif a:pos1[2] < a:pos2[2]
+    return -1
+  elseif a:pos1[2] > a:pos2[2]
+    return 1
+  else
+    return 0
+  endif
+endfunction
 function! s:set_pos(beginmark, endmark, motion_wiseness)
   let pos1 = getpos(a:beginmark)
   let pos2 = getpos(a:endmark)
-
-  if s:info.invoke_mode =~ 'v'
+  let info = s:info
+  if info.invoke_mode =~ 'v'
     " exclusive needs special treatment
     if &selection == 'exclusive'
       if a:motion_wiseness == 'char'
@@ -55,42 +68,53 @@ function! s:set_pos(beginmark, endmark, motion_wiseness)
         let pos2 = pos1
       endif
     endif
-    let s:info['begin'] = pos1
-    let s:info['end'] = pos2
-    let s:info['End'] = pos2
+    let info['begin'] = pos1
+    let info['end'] = pos2
+    let info['End'] = pos2
     call setpos("'[", pos1)
     call setpos("']", pos2)
-    let s:info['empty'] = 0  " visual mode will never be empty
+    let empty = 0
   else
     " Whenever 'operatorfunc' is called, '[ is always placed before '] even if
     " a backward motion is given to g@.  But there is the only one exception.
     " If an empty region is given to g@, '[ and '] are set to the same line, but
     " '[ is placed after '].
     " see https://github.com/kana/vim-operator-replace/issues/2
-    let s:info['empty'] = pos1[1] == pos2[1] && pos1[2] > pos2[2]
-    let s:info['begin'] = pos1
-    let s:info['End'] = pos2
-    if !s:info['empty']
-      let s:info['end'] = pos2
+    let empty = pos1[1] == pos2[1] && pos1[2] > pos2[2]
+    let info['begin'] = pos1
+    let info['End'] = pos2
+    if !empty
+      let info['end'] = pos2
+    endif
+  endif
+  if empty
+    let dir = 'empty'
+  else
+    let compare1 = s:compare_pos(info['begin'], info['curpos'])
+    let compare2 = s:compare_pos(info['curpos'], info['End'])
+    if compare1 == 0
+      let dir = compare2 == 0 ? 'Enclose' : 'forward'
+    elseif compare1 == -1
+      let dir = compare2 == 0? 'backward' : (compare2 == -1? 'enclose': 'Backward')
+    else
+      let dir = 'Forward'
     endif
   endif
   let s:info['motion_wiseness'] = a:motion_wiseness
+  let s:info['motion_direction'] = dir
 endfunction
 
-"let g:oinfo = s:info
-
-" mode: i for imap, v for vmap, n for nmap
-" (omap does not call this function)
-" the returned dict will be augumented with 'begin', 'end' and 'motion_wiseness'
-"
-" execute_mode: the mode the function is called
 " invoke_mode: the mode the mapping is invoked, (whether it is imap, omap...)
+" define_mode: the mode the mapping is defined, nNvViIoO
 function! s:init_info(callback, invoke_mode, define_mode, extra, hidden)
+  " hidden is overwritten
   let s:saved = copy(a:hidden)
   let s:saved['virtualedit'] = &virtualedit
   let s:saved['callback'] = function(a:callback)
+  " extra overwrites info
   let info = {
         \ 'curpos': getcurpos(),
+        \ 'length': len(getline('.')),
         \ 'count': v:count,
         \ 'count1': v:count1,
         \ 'register': v:register,
@@ -307,7 +331,7 @@ call operator_api#define(';o', 'operator_api#default_callback', 'nvio', {'type':
 call operator_api#define(';O', 'operator_api#default_callback', 'NVIO', {'type': 'O'})
 
 function! operator_api#selection()
-  if s:info.empty
+  if s:info.motion_direction == 'empty'
     return []
   endif
   let [l1, c1] = s:info.begin[1:2]
@@ -331,7 +355,7 @@ function! operator_api#selection()
 endfunction
 
 function! operator_api#deletion_moves_cursor()
-  if s:info.empty
+  if s:info.motion_direction == 'empty'
     return 0
   endif
   let motion_wiseness = s:info.motion_wiseness
@@ -360,7 +384,8 @@ function! operator_api#visual_select(...) abort
   let keystrokes = get(a:000, 0, '')
   let remap = get(a:000, 1, 0)
   let motion_wiseness = s:info['motion_wiseness']
-  if s:info.empty && motion_wiseness != 'line'
+  let motion_direction = s:info['motion_direction']
+  if motion_direction == 'empty' && motion_wiseness != 'line'
     call setpos("'<", [0, 0, 0, 0])
     call setpos("'>", [0, 0, 0, 0])
     Throw 'empty region in v-char/v-block mode is not allowed'
