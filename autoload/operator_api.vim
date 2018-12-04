@@ -88,8 +88,8 @@ endfunction
 function! s:init_info(callback, invoke_mode, define_mode, extra, hidden)
   let s:saved = copy(a:hidden)
   let s:saved['virtualedit'] = &virtualedit
+  let s:saved['callback'] = function(a:callback)
   let info = {
-        \ 'callback' : function(a:callback),
         \ 'curpos': getcurpos(),
         \ 'count': v:count,
         \ 'count1': v:count1,
@@ -139,7 +139,7 @@ function! s:post_process()
   endif
 endfunction
 function! operator_api#operatorfunc(motion_wiseness) abort
-  let l:Func = s:info.callback
+  let l:Func = s:saved.callback
   call s:set_pos("'[", "']", a:motion_wiseness)
   try
     call l:Func(s:info)
@@ -161,14 +161,20 @@ endfunction
 " because we are using <expr> mapping, the count inserted is still in the
 " typeahead buffer waiting to be processed
 " to cancel this count, use "@_" in normal/visual mode
-" In operator-pending mode, this count is not cancellable
+" In operator-pending mode, this count can be cancelled by entering :normal
 function! operator_api#_nmap(callback, define_mode, extra, hidden)
+  " in both cases, s:info.register == v:register
+  " s:info.count1 is the count entered before operator
+  " v:count1 is for the motion depending on whether the count is propagated
+  " from the op. So do not use it for the op
   set operatorfunc=operator_api#operatorfunc
   call s:init_info(a:callback, 'n', a:define_mode, a:extra, a:hidden)
-  let cancel = a:define_mode == 'n' ? '' : "\<esc>"
+  let cancel = a:define_mode == 'n' ? '' : printf("\<esc>".'"%s', s:info.register)
   return cancel . 'g@'
 endfunction
-function! operator_api#_imap(callback, deifne_mode, extra, hidden)
+function! operator_api#_imap(callback, define_mode, extra, hidden)
+  " not register and not count can be entered for the op
+  " the motion can have a count
   try
     call s:init_info(a:callback, 'i', a:define_mode, a:extra, a:hidden)
     set operatorfunc=operator_api#operatorfunc
@@ -181,27 +187,45 @@ endfunction
 function! operator_api#_omap(callback, define_mode, extra, hidden)
   let samemap = v:operator == 'g@'
         \  && &operatorfunc == 'operator_api#operatorfunc'
-        \  && s:info['callback'] == function(a:callback)
-        \  && (s:info['callback'] != function('operator_api#_vmap_wrapper') ||
+        \  && s:saved['callback'] == function(a:callback)
+        \  && (s:saved['callback'] != function('operator_api#_vmap_wrapper') ||
         \  s:saved['vmapto'] == get(a:hidden, 'vmapto', ''))
+  " in both cases, s:info.register == v:register
+  " s:info.count1 is the count entered before operator
+  " v:count1 is for the motion depending on whether the count is propagated
+  " from the op. So do not use it for the op
   if !samemap
     return "\<esc>"
   elseif v:count1 == 1 || a:define_mode == 'o'
     return '_'
   else
+    " use normal to cancel make the count already typed ineffective
     return printf(":normal! %d-\<cr>", v:count1 - 1)
   endif
 endfunction
 function! operator_api#_vmap(callback, define_mode, extra, hidden)
   set operatorfunc=operator_api#operatorfunc
   call s:init_info(a:callback, 'v', a:define_mode, a:extra, a:hidden)
-  let select = a:define_mode == 'V'? printf('`<%dv', v:count1): 'gv'
-  return printf(":\<cr>g@:normal! %s\<cr>", select)
+  " register and count should be obtained from s:info, not v:register and
+  " v:count. When the motion is entered, the register cannot be accessed, the
+  " v:count is for the motion instead of the operator, since we use :normal
+  " here
+  "
+  " In both cases, s:info.count1 is the count entered for the op.
+  if a:define_mode == 'V'
+    " In this case, v:count1 == s:info.count1
+    let rv = printf(":\<cr>" . '"%sg@:normal! `<%dv' . "\<cr>", s:info.register, s:info.count1)
+  else
+    " In this case, v:count1 == 1 alway
+    let count = s:info.count? string(s:info.count1) : ''
+    let rv = printf(":\<cr>" . '"%s%sg@:normal! gv'  . "\<cr>", s:info.register, count)
+  endif
+  return rv
 endfunction
 
 function! s:define(keyseq, Callback, extra, hidden, mode, define_mode)
   let template = '%snoremap <silent> <expr> %s operator_api#_%smap(%s, %s, %s, %s)'
-  let command = printf(template, a:mode, a:keyseq, a:mode, 
+  let command = printf(template, a:mode, a:keyseq, a:mode,
         \  string(a:Callback), string(a:define_mode), a:extra, a:hidden)
   exe command
 endfunction
@@ -217,7 +241,7 @@ function! operator_api#define(keyseq, callback, ...) abort
     let modes = get(a:000, 0, 'nvo')
     let extra_options = get(a:000, 1, {})
     let hidden_options = get(a:000, 2, {})
-    let l:Define = {mode, define_mode -> s:define(a:keyseq, a:callback, 
+    let l:Define = {mode, define_mode -> s:define(a:keyseq, a:callback,
           \  extra_options, hidden_options, mode, define_mode)}
     if eval(string(extra_options)) != extra_options
       Throw 'extra_options cannot be used'
@@ -277,7 +301,7 @@ function! operator_api#default_map(name)
   return '<Plug>(operator-api-' . a:name . ')'
 endfunction
 function! operator_api#default_callback(info)
-  echo a:info
+  echo v:register v:count1 v:count a:info
 endfunction
 call operator_api#define(';o', 'operator_api#default_callback', 'nvio', {'type': 'o'})
 call operator_api#define(';O', 'operator_api#default_callback', 'NVIO', {'type': 'O'})
