@@ -31,11 +31,13 @@
 " augument the info dict with 'begin', 'end' and 'motion_wiseness'
 let s:motion_wiseness = {'v': 'char', 'V': 'line', "\<c-v>": 'block'}
 let s:visual_mode = { 'char':'v', 'line': 'V', 'block': "\<c-v>"}
-function! s:compare_pos(pos1, pos2)
+function! s:compare_pos(pos1, pos2, motion_wiseness)
   if a:pos1[1] < a:pos2[1]
     return -1
   elseif a:pos1[1] > a:pos2[1]
     return 1
+  elseif a:motion_wiseness == 'line'
+    return 0
   elseif a:pos1[2] < a:pos2[2]
     return -1
   elseif a:pos1[2] > a:pos2[2]
@@ -49,8 +51,7 @@ function! s:set_pos(beginmark, endmark, motion_wiseness)
   let pos2 = getpos(a:endmark)
   let info = s:info
   if info.invoke_mode =~ 'v'
-    " exclusive needs special treatment
-    if &selection == 'exclusive'
+    if &selection == 'exclusive' " exclusive needs special treatment
       if a:motion_wiseness == 'char'
         if pos2[2] != 1
           let pos2[2] -= 1
@@ -90,14 +91,17 @@ function! s:set_pos(beginmark, endmark, motion_wiseness)
   if empty
     let dir = 'empty'
   else
-    let compare1 = s:compare_pos(info['begin'], info['curpos'])
-    let compare2 = s:compare_pos(info['curpos'], info['End'])
+    let compare1 = s:compare_pos(info.begin, info.curpos, a:motion_wiseness)
+    let compare2 = s:compare_pos(info.curpos, info.End, a:motion_wiseness)
     if compare1 == 0
       let dir = compare2 == 0 ? 'Enclose' : 'forward'
     elseif compare1 == -1
       let dir = compare2 == 0? 'backward' : (compare2 == -1? 'enclose': 'Backward')
     else
       let dir = 'Forward'
+    endif
+    if a:motion_wiseness == 'line' || dir =~ '^[bf]' " linewise does not have backward and forward
+      let dir = 'enclose'
     endif
   endif
   let s:info['motion_wiseness'] = a:motion_wiseness
@@ -108,9 +112,9 @@ endfunction
 " define_mode: the mode the mapping is defined, nNvViIoO
 function! s:init_info(callback, invoke_mode, define_mode, extra, hidden)
   " hidden is overwritten
-  let s:saved = copy(a:hidden)
-  let s:saved['virtualedit'] = &virtualedit
-  let s:saved['callback'] = function(a:callback)
+  let s:meta = copy(a:hidden)
+  let s:meta['virtualedit'] = &virtualedit
+  let s:meta['callback'] = function(a:callback)
   " extra overwrites info
   let info = {
         \ 'curpos': getcurpos(),
@@ -126,6 +130,28 @@ function! s:init_info(callback, invoke_mode, define_mode, extra, hidden)
   let s:info = info
 endfunction
 
+function! s:adjust_cursor()
+  let info = s:info
+  if info.motion_direction =~? '^back'
+    let line = info.end[1]
+    let change = 'begin'
+  elseif info.motion_direction =~? '^for'
+    let line = info.begin[1]
+    let change = 'end'
+  else  " enclose or empty
+    let line = info.curpos[1]
+    let change = ''
+  endif
+  let change = get(info, 'change_at', change)
+  if change == 'begin'
+    let col = info.curpos[2] + len(getline(line)) - info.length
+  elseif change == 'both'
+    let col = info.curpos[2] + (len(getline(line)) - info.length)/2
+  else
+    let col = info.curpos[2]
+  endif
+  return [0, line, col, 0]
+endfunction
 function! s:get(key)
   let key = a:key
   if !has_key(s:info, key)
@@ -144,14 +170,22 @@ function! s:get(key)
   endif
 endfunction
 function! s:post_process()
+  let info = s:info
   let cursor = s:get('cursor')
   if !empty(cursor)
     let cursor = cursor[0]
     if type(cursor) == v:t_string
-      call setpos('.', getpos(cursor))
+      if cursor == 'Curpos'
+        let pos = info.curpos
+      elseif cursor == 'curpos'
+        let pos = s:adjust_cursor()
+      else
+        let pos = getpos(cursor)
+      endif
     elseif type(cursor) == v:t_list
-      call setpos('.', cursor)
+      let pos = cursor
     endif
+    call setpos('.', pos)
   endif
   let shift = s:get('shift')
   if !empty(shift)
@@ -163,7 +197,7 @@ function! s:post_process()
   endif
 endfunction
 function! operator_api#operatorfunc(motion_wiseness) abort
-  let l:Func = s:saved.callback
+  let l:Func = s:meta.callback
   call s:set_pos("'[", "']", a:motion_wiseness)
   try
     call l:Func(s:info)
@@ -171,7 +205,7 @@ function! operator_api#operatorfunc(motion_wiseness) abort
   catch
     Throw 'operator nmap'
   finally
-    let &virtualedit = s:saved.virtualedit
+    let &virtualedit = s:meta.virtualedit
     if s:info.define_mode == 'I'
       if s:info.buf != bufnr('%')
         exe 'b' s:info.buf
@@ -211,9 +245,9 @@ endfunction
 function! operator_api#_omap(callback, define_mode, extra, hidden)
   let samemap = v:operator == 'g@'
         \  && &operatorfunc == 'operator_api#operatorfunc'
-        \  && s:saved['callback'] == function(a:callback)
-        \  && (s:saved['callback'] != function('operator_api#_vmap_wrapper') ||
-        \  s:saved['vmapto'] == get(a:hidden, 'vmapto', ''))
+        \  && s:meta['callback'] == function(a:callback)
+        \  && (s:meta['callback'] != function('operator_api#_vmap_wrapper') ||
+        \  s:meta['vmapto'] == get(a:hidden, 'vmapto', ''))
   " in both cases, s:info.register == v:register
   " s:info.count1 is the count entered before operator
   " v:count1 is for the motion depending on whether the count is propagated
@@ -303,8 +337,8 @@ function! operator_api#define(keyseq, callback, ...) abort
 endfunction
 
 function! operator_api#_vmap_wrapper(info)
-  let remap = s:saved['remap']
-  let mapto = s:saved['vmapto']
+  let remap = s:meta['remap']
+  let mapto = s:meta['vmapto']
   if a:info.define_mode == 'N' || a:info.define_mode == 'v'
     let count = string(a:info.count1)
   else
@@ -315,8 +349,10 @@ endfunction
 function! operator_api#from_vmap(keyseq, mapto, ...) abort
   let modes = get(a:000, 0, 'nvo')
   let remap = get(a:000, 1, 1)
-  let hidden = {'vmapto': a:mapto, 'remap': remap}
-  let args = [a:keyseq, 'operator_api#_vmap_wrapper', modes, {}, hidden]
+  let extra = copy(get(a:000, 2, {}))
+  let hidden = copy(get(a:000, 3, {}))
+  call extend(hidden, {'vmapto': a:mapto, 'remap': remap})
+  let args = [a:keyseq, 'operator_api#_vmap_wrapper', modes, extra, hidden]
   call call('operator_api#define', args)
 endfunction
 
@@ -399,9 +435,9 @@ endfunction
 
 """""""""""" Examples
 
-call operator_api#from_vmap(';>', '>', 'NovI', 0)
-call operator_api#from_vmap(';<', '<', 'NovI', 0)
-call operator_api#from_vmap('<f9>', '<Plug>NERDCommenterToggle', 'novi')
+"call operator_api#from_vmap(';>', '>', 'NovI', 0)
+"call operator_api#from_vmap(';<', '<', 'NovI', 0)
+"call operator_api#from_vmap('<f9>', '<Plug>NERDCommenterToggle', 'novi')
 
 " __END__  "{{{1
 " vim: foldmethod=marker
