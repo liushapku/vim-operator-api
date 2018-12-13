@@ -234,7 +234,18 @@ function! operator_api#_nmap(callback, define_mode, extra, hidden)
 endfunction
 function! operator_api#_imap_restore()
   let &virtualedit = s:meta.virtualedit
-  ounmap  <esc>
+  let maparg = s:meta.esc_maparg
+  if get(maparg, 'buffer', 0)
+    exe (maparg.noremap ? 'onoremap' : 'omap') .
+         \ (maparg.buffer ? ' <buffer> ' : '') .
+         \ (maparg.expr   ? ' <expr> '   : '') .
+         \ (maparg.nowait ? ' <nowait> ' : '') .
+         \ (maparg.silent ? ' <silent> ' : '') .
+         \ maparg.lhs .
+         \ maparg.rhs
+  else
+    ounmap <buffer> <esc>
+  endif
   return "\<esc>"
 endfunction
 function! operator_api#_imap(callback, define_mode, extra, hidden)
@@ -245,7 +256,8 @@ function! operator_api#_imap(callback, define_mode, extra, hidden)
     set operatorfunc=operator_api#operatorfunc
     let &virtualedit = 'onemore'
     " if operator is cancelled, we need to restore virtualedit
-    onoremap  <expr> <esc> operator_api#_imap_restore()
+    let s:meta.esc_maparg = maparg('<esc>', 'o', 0, 1)
+    onoremap <buffer> <expr> <esc> operator_api#_imap_restore()
     return "\<c-o>g@"
   catch
     Throw 'operator imap'
