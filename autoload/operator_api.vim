@@ -365,7 +365,9 @@ function! operator_api#_vmap_wrapper(info)
   else
     let count = ''
   endif
-  call operator_api#visual_select(count . mapto, remap)
+  if s:info.motion_direction != 'empty'
+    call operator_api#visual_select(count . mapto, remap)
+  endif
 endfunction
 function! operator_api#from_vmap(keyseq, mapto, ...) abort
   let modes = get(a:000, 0, 'nvo')
@@ -445,7 +447,8 @@ function! operator_api#visual_select(...) abort
   if motion_direction == 'empty' && motion_wiseness != 'line'
     call setpos("'<", [0, 0, 0, 0])
     call setpos("'>", [0, 0, 0, 0])
-    Throw 'empty region in v-char/v-block mode is not allowed'
+    let msg = string(s:info)
+    Throw 'empty region in v-char/v-block mode is not allowed:' . msg
   else
     let bang = remap? '' : '!'
     let vmode = s:visual_mode[motion_wiseness]
