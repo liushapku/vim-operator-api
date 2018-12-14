@@ -236,12 +236,12 @@ function! operator_api#_imap_restore()
   let &virtualedit = s:meta.virtualedit
   let maparg = s:meta.esc_maparg
   if get(maparg, 'buffer', 0)
-    exe (maparg.noremap ? 'onoremap' : 'omap') .
-         \ (maparg.buffer ? ' <buffer> ' : '') .
-         \ (maparg.expr   ? ' <expr> '   : '') .
-         \ (maparg.nowait ? ' <nowait> ' : '') .
-         \ (maparg.silent ? ' <silent> ' : '') .
-         \ maparg.lhs .
+    exe (maparg.noremap ? 'onoremap ' : 'omap ') .
+         \ (maparg.buffer ? '<buffer> ' : '') .
+         \ (maparg.expr   ? '<expr> '   : '') .
+         \ (maparg.nowait ? '<nowait> ' : '') .
+         \ (maparg.silent ? '<silent> ' : '') .
+         \ maparg.lhs . ' ' .
          \ maparg.rhs
   else
     ounmap <buffer> <esc>
