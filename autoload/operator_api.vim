@@ -302,27 +302,36 @@ function! operator_api#_vmap(callback, define_mode, extra, hidden)
   return rv
 endfunction
 
-function! s:define(keyseq, Callback, extra, hidden, mode, define_mode)
-  let template = '%snoremap <silent> <expr> %s operator_api#_%smap(%s, %s, %s, %s)'
-  let command = printf(template, a:mode, a:keyseq, a:mode,
+" optinal: dict with keys:
+" "buffer": number, map is for <buffer=N>
+function! s:define(keyseq, Callback, extra, hidden, mode, define_mode, buffer)
+  let buffer = a:buffer? '<buffer>' : ''
+  let template = '%snoremap %s <silent> <expr> %s operator_api#_%smap(%s, %s, %s, %s)'
+  let command = printf(template, a:mode, buffer, a:keyseq, a:mode,
         \  string(a:Callback), string(a:define_mode), a:extra, a:hidden)
+  "echo command
   exe command
 endfunction
 
-" optional: modes (default "nvo")
-" extra_options (a dict to passed to info)
+" optional:
+" (0): modes (default "nvo")
+" (1): extra_options (a dict to passed to info)
+" (2): hidden_options
+" (3): buffer: 0 means no <buffer>, N means <buffer=N>
 function! operator_api#define(keyseq, callback, ...) abort
   let keyseq = a:keyseq
   if type(a:callback) != v:t_string && type(a:callback) == v:t_func
     Throw printf('define operator %s failed: callback %s is not a function', a:keyseq, a:callback)
   endif
+  let modes = get(a:000, 0, 'nvo')
+  let extra_options = get(a:000, 1, {})
+  let hidden_options = get(a:000, 2, {})
+  let buffer = get(a:000, 3, 0)
+  "echo modes extra_options hidden_options buffer
+  let l:Define = {mode, define_mode -> s:define(a:keyseq, a:callback,
+        \  extra_options, hidden_options, mode, define_mode, buffer)}
   try
-    let modes = get(a:000, 0, 'nvo')
-    let extra_options = get(a:000, 1, {})
-    let hidden_options = get(a:000, 2, {})
-    let l:Define = {mode, define_mode -> s:define(a:keyseq, a:callback,
-          \  extra_options, hidden_options, mode, define_mode)}
-    if eval(string(extra_options)) != extra_options
+    if type(extra_options) != v:t_dict || eval(string(extra_options)) != extra_options
       Throw 'extra_options cannot be used'
     endif
     if modes =~ '[nN]'
@@ -374,8 +383,9 @@ function! operator_api#from_vmap(keyseq, mapto, ...) abort
   let remap = get(a:000, 1, 1)
   let extra = copy(get(a:000, 2, {}))
   let hidden = copy(get(a:000, 3, {}))
+  let buffer = get(a:000, 4, 0)
   call extend(hidden, {'vmapto': a:mapto, 'remap': remap})
-  let args = [a:keyseq, 'operator_api#_vmap_wrapper', modes, extra, hidden]
+  let args = [a:keyseq, 'operator_api#_vmap_wrapper', modes, extra, hidden, buffer]
   call call('operator_api#define', args)
 endfunction
 
@@ -438,7 +448,8 @@ function! operator_api#deletion_moves_cursor()
 endfunction
 
 " optional:
-" 1. the normal mode keys to send after entering visual
+" (0): the normal mode keys to send after entering visual
+" (1): 1: use "normal", 0: use "normal!"
 function! operator_api#visual_select(...) abort
   let keystrokes = get(a:000, 0, '')
   let remap = get(a:000, 1, 0)
