@@ -396,6 +396,7 @@ endfunction
 function! operator_api#default_callback(info)
   echo v:register v:count1 v:count a:info
 endfunction
+" these two default operators simply displays the move's info
 call operator_api#define(';o', 'operator_api#default_callback', 'nvio', {'type': 'o'})
 call operator_api#define(';O', 'operator_api#default_callback', 'NVIO', {'type': 'O'})
 
