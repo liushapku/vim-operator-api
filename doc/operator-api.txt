@@ -59,6 +59,41 @@ You can use this operator as follows:
 
 See also |operator-api-examples| for more examples and explanations.
 
+API							*operator-api-api*
+
+- `operator_api#from_vmap`
+
+Example:
+parameters:
+  keyseq: key sequence to be mapped
+  mapto:  key sequence in v mode
+  modes:  any combination of 'nNvViIoO'
+  remap:  whether remap is allowed (as in nmap vs nnoremap)
+  extra:  dict (default {}),
+  hidden: dict (default {}),
+  buffer: whether a buffer local map
+
+
+- `operator_api#default_callback`
+A simple callback to check the info structure
+
+- `operator_api#selection()`
+return the selection from the motion
+
+- `operator_api#visual_select(...)`
+To visually select the selected area and optionally send some keys
+after entering visual mode
+" params
+" keys (optional): the normal mode keys to send after entering visual
+" exclaim (optional): 1: send keys using "normal", 0: send keys using "normal!"
+
+" returns a default map with name
+" example:
+" call operator_api#define(operator_api#default_map('myop'), 'op_impl', "nov")
+
+function! operator_api#default_map(name)
+" returns whether deleting some chars in selection will move the cursor
+- operator_api#deletion_moves_cursor()
 
 Requirements:
 - Vim 7.2 or later

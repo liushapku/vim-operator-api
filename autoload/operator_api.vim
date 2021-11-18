@@ -110,6 +110,10 @@ endfunction
 
 " invoke_mode: the mode the mapping is invoked, (whether it is imap, omap...)
 " define_mode: the mode the mapping is defined, nNvViIoO
+"  - n, N uses nmap
+"  - v, V uses vmap
+"  - i, I uses imap
+"  - o, O uses omap
 function! s:init_info(callback, invoke_mode, define_mode, extra, hidden)
   " hidden is overwritten
   let s:meta = copy(a:hidden)
@@ -196,7 +200,7 @@ function! s:post_process()
     call setpos('.', curpos)
   endif
 endfunction
-function! operator_api#operatorfunc(motion_wiseness) abort
+function! operator_api#_operatorfunc(motion_wiseness) abort
   let l:Func = s:meta.callback
   call s:set_pos("'[", "']", a:motion_wiseness)
   try
@@ -222,13 +226,17 @@ endfunction
 " typeahead buffer waiting to be processed
 " to cancel this count, use "@_" in normal/visual mode
 " In operator-pending mode, this count can be cancelled by entering :normal
+"
+" Maybe: using n for the count to be propagated
+" using N for the count not to be propagated
 function! operator_api#_nmap(callback, define_mode, extra, hidden)
   " in both cases, s:info.register == v:register
   " s:info.count1 is the count entered before operator
   " v:count1 is for the motion depending on whether the count is propagated
   " from the op. So do not use it for the op
-  set operatorfunc=operator_api#operatorfunc
+  set operatorfunc=operator_api#_operatorfunc
   call s:init_info(a:callback, 'n', a:define_mode, a:extra, a:hidden)
+  " if N: then cancel the count by esc
   let cancel = a:define_mode == 'n' ? '' : printf("\<esc>".'"%s', s:info.register)
   return cancel . 'g@'
 endfunction
@@ -253,7 +261,7 @@ function! operator_api#_imap(callback, define_mode, extra, hidden)
   " the motion can have a count
   try
     call s:init_info(a:callback, 'i', a:define_mode, a:extra, a:hidden)
-    set operatorfunc=operator_api#operatorfunc
+    set operatorfunc=operator_api#_operatorfunc
     let &virtualedit = 'onemore'
     " if operator is cancelled, we need to restore virtualedit
     let s:meta.esc_maparg = maparg('<esc>', 'o', 0, 1)
@@ -265,7 +273,7 @@ function! operator_api#_imap(callback, define_mode, extra, hidden)
 endfunction
 function! operator_api#_omap(callback, define_mode, extra, hidden)
   let samemap = v:operator == 'g@'
-        \  && &operatorfunc == 'operator_api#operatorfunc'
+        \  && &operatorfunc == 'operator_api#_operatorfunc'
         \  && s:meta['callback'] == function(a:callback)
         \  && (s:meta['callback'] != function('operator_api#_vmap_wrapper') ||
         \  s:meta['vmapto'] == get(a:hidden, 'vmapto', ''))
@@ -282,8 +290,9 @@ function! operator_api#_omap(callback, define_mode, extra, hidden)
     return printf(":normal! %d-\<cr>", v:count1 - 1)
   endif
 endfunction
+
 function! operator_api#_vmap(callback, define_mode, extra, hidden)
-  set operatorfunc=operator_api#operatorfunc
+  set operatorfunc=operator_api#_operatorfunc
   call s:init_info(a:callback, 'v', a:define_mode, a:extra, a:hidden)
   " register and count should be obtained from s:info, not v:register and
   " v:count. When the motion is entered, the register cannot be accessed, the
@@ -291,6 +300,7 @@ function! operator_api#_vmap(callback, define_mode, extra, hidden)
   " here
   "
   " In both cases, s:info.count1 is the count entered for the op.
+  " Maybe: V for propagating the count
   if a:define_mode == 'V'
     " In this case, v:count1 == s:info.count1
     let rv = printf(":\<cr>" . '"%sg@:normal! `<%dv' . "\<cr>", s:info.register, s:info.count1)
@@ -313,11 +323,49 @@ function! s:define(keyseq, Callback, extra, hidden, mode, define_mode, buffer)
   exe command
 endfunction
 
+" params
+"   keyseq: key sequence to be mapped
+"   callback: funcref or string name of func
+"     this func will be called with info, a dict with the following keys,
+"     which stores the infomation about the motion
+"       - 'buf': the current buffer
+"       - 'length': line length of current line
+"       - 'invoke_mode': any in 'nvoi'
+"       - 'define_mode': any in 'nNvVoOiI'
+"           - the lower case letters propagate the count
+"             (eg: 2;o3j will select 7 lines, move down 6 lines)
+"           - the upper case letters do not propage the count
+"             (eg: 2;O3j will select 4 lines, move down 3 lines)
+"           - in both cases, info.count will be 3
+"           - NOTE: when we do n-op-m-motion:
+"             - in v mode, n is replayed after we do visual selected
+"             - in V mode, n is dropped
+"             - in n/o/i mode, n*m is applied to motion for selection, afterwards,
+"                op does not receive n again
+"             - in N/O/I mode, m is appied to motion for selection, afterwards, we
+"                replay n before op
+"
+"       - 'count1': v:count1,
+"       - 'count': v:count,
+"       - 'register': v:register,
+"       - 'motion_wiseness': 'char', 'line', 'block'
+"       - 'motion_direction': 'enclose', 'Enclose', 'forward', 'Forward',
+"                             'backward', 'Backward', or 'empty'
+"               - enclose is when text object is used or line mode?
+"       - 'begin': getpos of begin of selection
+"       - 'end':
+"           - when empty selection: key do not exist
+"           - otherwise: getpos of end of selection
+"       - 'End':   getpos of end of selection
+"       - 'curpos': curent cursor position
+"       - 'curpos': getcurpos(),
+"       - other keys from a:extra are merged with info too, to overwrite
+"         the above keys with caution
 " optional:
-" (0): modes (default "nvo")
-" (1): extra_options (a dict to passed to info)
-" (2): hidden_options
-" (3): buffer: 0 means no <buffer>, N means <buffer=N>
+" 0 modes (default "nvo")
+" 1 extra_options: a dict to be passed to info, and merged into info dic
+" 2 hidden_options
+" 3 buffer: 0 means no <buffer>, N means <buffer=N>
 function! operator_api#define(keyseq, callback, ...) abort
   let keyseq = a:keyseq
   if type(a:callback) != v:t_string && type(a:callback) == v:t_func
@@ -370,14 +418,32 @@ function! operator_api#_vmap_wrapper(info)
   let remap = s:meta['remap']
   let mapto = s:meta['vmapto']
   if a:info.define_mode == 'N' || a:info.define_mode == 'v'
+    " in N mode, need to replay count since the count is not propagated to
+    " motion
+    " in v mode, count is not consumed by motion, so we need to keep it
     let count = string(a:info.count1)
   else
     let count = ''
   endif
   if s:info.motion_direction != 'empty'
-    call operator_api#visual_select(count . mapto, remap)
+    let seq = '"' . a:info.register . count . mapto
+    call operator_api#visual_select(seq, remap)
   endif
 endfunction
+
+" If you already have a vmap, using this function to define maps that
+" also works in other mode as a operator
+"
+" Example:
+" parameters:
+"   keyseq: key sequence to be mapped: note: should not use "\<>", such as
+"   "<cr>" directly
+"   mapto:  key sequence in v mode: note need to use "\<>" for key
+"   modes:  any combination of 'nNvViIoO'
+"   remap:  whether remap is allowed (as in nmap vs nnoremap) default: 1
+"   extra:  dict (default {}),
+"   hidden: dict (default {}),
+"   buffer: 0 means no <buffer>, N means <buffer=N>
 function! operator_api#from_vmap(keyseq, mapto, ...) abort
   let modes = get(a:000, 0, 'nvo')
   let remap = get(a:000, 1, 1)
@@ -389,17 +455,21 @@ function! operator_api#from_vmap(keyseq, mapto, ...) abort
   call call('operator_api#define', args)
 endfunction
 
-" other helper functions
+" returns a default map with name
+" example:
+" call operator_api#define(operator_api#default_map('myop'), 'op_impl', "nov")
 function! operator_api#default_map(name)
   return '<Plug>(operator-api-' . a:name . ')'
 endfunction
+" a simple callback that displays the v:register, v:count1, v:count and s:info
 function! operator_api#default_callback(info)
-  echo v:register v:count1 v:count a:info
+  echo v:register v:count1 v:count getpos("'[") getpos("']") getpos("'<") getpos("'>") a:info
 endfunction
 " these two default operators simply displays the move's info
 call operator_api#define(';o', 'operator_api#default_callback', 'nvio', {'type': 'o'})
 call operator_api#define(';O', 'operator_api#default_callback', 'NVIO', {'type': 'O'})
 
+" return the selected text from the motion
 function! operator_api#selection()
   if s:info.motion_direction == 'empty'
     return []
@@ -424,6 +494,7 @@ function! operator_api#selection()
   return lines
 endfunction
 
+" returns whether deleting some chars in selection will move the cursor
 function! operator_api#deletion_moves_cursor()
   if s:info.motion_direction == 'empty'
     return 0
@@ -448,7 +519,7 @@ function! operator_api#deletion_moves_cursor()
   endif
 endfunction
 
-" optional:
+" optional params
 " (0): the normal mode keys to send after entering visual
 " (1): 1: use "normal", 0: use "normal!"
 function! operator_api#visual_select(...) abort
