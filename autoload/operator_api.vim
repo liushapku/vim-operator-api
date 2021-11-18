@@ -114,11 +114,11 @@ endfunction
 "  - v, V uses vmap
 "  - i, I uses imap
 "  - o, O uses omap
-function! s:init_info(callback, invoke_mode, define_mode, extra, hidden)
-  " hidden is overwritten
-  let s:meta = copy(a:hidden)
+function! s:init_info(callback_name, invoke_mode, define_mode, extra)
+  let s:meta = {}
   let s:meta['virtualedit'] = &virtualedit
-  let s:meta['callback'] = function(a:callback)
+  let s:meta['callback'] = a:callback_name
+  let x = s:meta.callback
   " extra overwrites info
   let info = {
         \ 'curpos': getcurpos(),
@@ -200,8 +200,11 @@ function! s:post_process()
     call setpos('.', curpos)
   endif
 endfunction
+" used to set &opfunc
 function! operator_api#_operatorfunc(motion_wiseness) abort
-  let l:Func = s:meta.callback
+  let callback_name = s:meta['callback']
+  let all_callbacks = string(s:callback_map)
+  let l:Func = s:callback_map[callback_name]
   call s:set_pos("'[", "']", a:motion_wiseness)
   try
     call l:Func(s:info)
@@ -229,14 +232,15 @@ endfunction
 "
 " Maybe: using n for the count to be propagated
 " using N for the count not to be propagated
-function! operator_api#_nmap(callback, define_mode, extra, hidden)
+function! operator_api#_nmap(callback_name, define_mode, extra)
   " in both cases, s:info.register == v:register
   " s:info.count1 is the count entered before operator
   " v:count1 is for the motion depending on whether the count is propagated
   " from the op. So do not use it for the op
+  "
+  call s:init_info(a:callback_name, 'n', a:define_mode, a:extra)
   set operatorfunc=operator_api#_operatorfunc
-  call s:init_info(a:callback, 'n', a:define_mode, a:extra, a:hidden)
-  " if N: then cancel the count by esc
+  " if N mode: then cancel the count by esc
   let cancel = a:define_mode == 'n' ? '' : printf("\<esc>".'"%s', s:info.register)
   return cancel . 'g@'
 endfunction
@@ -256,11 +260,12 @@ function! operator_api#_imap_restore()
   endif
   return "\<esc>"
 endfunction
-function! operator_api#_imap(callback, define_mode, extra, hidden)
+" imap is implemented using omap, which is implemented using nmap
+function! operator_api#_imap(callback_name, define_mode, extra)
   " not register and not count can be entered for the op
   " the motion can have a count
   try
-    call s:init_info(a:callback, 'i', a:define_mode, a:extra, a:hidden)
+    call s:init_info(a:callback_name, 'i', a:define_mode, a:extra)
     set operatorfunc=operator_api#_operatorfunc
     let &virtualedit = 'onemore'
     " if operator is cancelled, we need to restore virtualedit
@@ -271,17 +276,19 @@ function! operator_api#_imap(callback, define_mode, extra, hidden)
     Throw 'operator imap'
   endtry
 endfunction
-function! operator_api#_omap(callback, define_mode, extra, hidden)
-  let samemap = v:operator == 'g@'
+" omap is implemented using nmap
+function! operator_api#_omap(callback_name, define_mode, extra)
+  let callback = s:callback_map[a:callback_name]
+  let issamemap = v:operator == 'g@'
         \  && &operatorfunc == 'operator_api#_operatorfunc'
-        \  && s:meta['callback'] == function(a:callback)
+        \  && s:meta['callback'] == callback
         \  && (s:meta['callback'] != function('operator_api#_vmap_wrapper') ||
-        \  s:meta['vmapto'] == get(a:hidden, 'vmapto', ''))
+        \  s:meta['vmapto'] == get(a:extra, '_vmapto', ''))
   " in both cases, s:info.register == v:register
   " s:info.count1 is the count entered before operator
   " v:count1 is for the motion depending on whether the count is propagated
   " from the op. So do not use it for the op
-  if !samemap
+  if !issamemap
     return "\<esc>"
   elseif v:count1 == 1 || a:define_mode == 'o'
     return '_'
@@ -291,9 +298,9 @@ function! operator_api#_omap(callback, define_mode, extra, hidden)
   endif
 endfunction
 
-function! operator_api#_vmap(callback, define_mode, extra, hidden)
+function! operator_api#_vmap(callback_name, define_mode, extra)
+  call s:init_info(a:callback_name, 'v', a:define_mode, a:extra)
   set operatorfunc=operator_api#_operatorfunc
-  call s:init_info(a:callback, 'v', a:define_mode, a:extra, a:hidden)
   " register and count should be obtained from s:info, not v:register and
   " v:count. When the motion is entered, the register cannot be accessed, the
   " v:count is for the motion instead of the operator, since we use :normal
@@ -312,22 +319,37 @@ function! operator_api#_vmap(callback, define_mode, extra, hidden)
   return rv
 endfunction
 
+function! s:func_to_string(func)
+  return type(a:func) == v:t_func? string(a:func) : a:func
+endfunction
 " optinal: dict with keys:
 " "buffer": number, map is for <buffer=N>
-function! s:define(keyseq, Callback, extra, hidden, mode, define_mode, buffer)
+function! s:define(keyseq, callback, extra, mode, define_mode, buffer)
+  let Callback = function(a:callback)
+  let callback_name = s:func_to_string(a:callback)
+  let s:callback_map[callback_name] = Callback
   let buffer = a:buffer? '<buffer>' : ''
-  let template = '%snoremap %s <silent> <expr> %s operator_api#_%smap(%s, %s, %s, %s)'
+  let template = '%snoremap %s <silent> <expr> %s operator_api#_%smap(%s, %s, %s)'
   let command = printf(template, a:mode, buffer, a:keyseq, a:mode,
-        \  string(a:Callback), string(a:define_mode), a:extra, a:hidden)
-  "echo command
+        \  string(callback_name), string(a:define_mode), a:extra)
   exe command
+endfunction
+
+" function map: name -> callback Funcref
+" this is to handle lambdas for which a Funcref cannot be reconstructed from
+" its string
+" For normal functions, function(string(func)) will still get the Funcref to
+" func, but for lambda, function(string(lambda)) will not get the Funcref
+let s:callback_map = {}
+function! operator_api#_registered_callbacks()
+  return s:callback_map
 endfunction
 
 " params
 "   keyseq: key sequence to be mapped
 "   callback: funcref or string name of func
 "     this func will be called with info, a dict with the following keys,
-"     which stores the infomation about the motion
+"     which stores the infomation about the motion (help_info)
 "       - 'buf': the current buffer
 "       - 'length': line length of current line
 "       - 'invoke_mode': any in 'nvoi'
@@ -340,10 +362,14 @@ endfunction
 "           - NOTE: when we do n-op-m-motion:
 "             - in v mode, n is replayed after we do visual selected
 "             - in V mode, n is dropped
-"             - in n/o/i mode, n*m is applied to motion for selection, afterwards,
+"             - in n/o mode, n*m is applied to motion for selection, afterwards,
 "                op does not receive n again
-"             - in N/O/I mode, m is appied to motion for selection, afterwards, we
+"             - in N/O mode, m is appied to motion for selection, afterwards, we
 "                replay n before op
+"             - in iI mode, there is not way to insert n, since n will be typed
+"             as text. Comparing to i, GUESS: I is able to put the cursor back to the
+"             current buffer if the callback moved the cursor out of the
+"             current buffer
 "
 "       - 'count1': v:count1,
 "       - 'count': v:count,
@@ -364,20 +390,17 @@ endfunction
 " optional:
 " 0 modes (default "nvo")
 " 1 extra_options: a dict to be passed to info, and merged into info dic
-" 2 hidden_options
-" 3 buffer: 0 means no <buffer>, N means <buffer=N>
+" 2 buffer: 0 means no <buffer>, N means <buffer=N>
 function! operator_api#define(keyseq, callback, ...) abort
   let keyseq = a:keyseq
-  if type(a:callback) != v:t_string && type(a:callback) == v:t_func
+  if type(a:callback) != v:t_string && type(a:callback) != v:t_func
     Throw printf('define operator %s failed: callback %s is not a function', a:keyseq, a:callback)
   endif
   let modes = get(a:000, 0, 'nvo')
   let extra_options = get(a:000, 1, {})
-  let hidden_options = get(a:000, 2, {})
   let buffer = get(a:000, 3, 0)
-  "echo modes extra_options hidden_options buffer
   let l:Define = {mode, define_mode -> s:define(a:keyseq, a:callback,
-        \  extra_options, hidden_options, mode, define_mode, buffer)}
+        \  extra_options, mode, define_mode, buffer)}
   try
     if type(extra_options) != v:t_dict || eval(string(extra_options)) != extra_options
       Throw 'extra_options cannot be used'
@@ -431,27 +454,43 @@ function! operator_api#_vmap_wrapper(info)
   endif
 endfunction
 
+function! operator_api#_last_replace()
+  return s:_last_replace
+endfunction
+function! operator_api#_do_replace(newstr)
+  let s:_last_replace = a:newstr
+  call operator_api#visual_select("c\<c-r>=operator_api#_last_replace()\<cr>")
+endfunction
+
+" take a function with signature f(info) -> replace_str
+" returns a function with param info, which can be used for
+" operator_api#define
+function! operator_api#get_replace_ref(Replace_func)
+  return {info -> operator_api#_do_replace(function(a:Replace_func)(info))}
+endfunction
+
 " If you already have a vmap, using this function to define maps that
 " also works in other mode as a operator
 "
-" Example:
 " parameters:
 "   keyseq: key sequence to be mapped: note: should not use "\<>", such as
 "   "<cr>" directly
 "   mapto:  key sequence in v mode: note need to use "\<>" for key
 "   modes:  any combination of 'nNvViIoO'
 "   remap:  whether remap is allowed (as in nmap vs nnoremap) default: 1
-"   extra:  dict (default {}),
-"   hidden: dict (default {}),
+"   extra:  dict (default {}), following keys has special meaning
+"     - 'cursor': 'curpos', 'Curpos'
+"     - 'change_pos': 'before', 'after', 'both'
+"     which is used to adjust the cursor position
+"     MORE DOC NEEDED
 "   buffer: 0 means no <buffer>, N means <buffer=N>
 function! operator_api#from_vmap(keyseq, mapto, ...) abort
   let modes = get(a:000, 0, 'nvo')
   let remap = get(a:000, 1, 1)
   let extra = copy(get(a:000, 2, {}))
-  let hidden = copy(get(a:000, 3, {}))
   let buffer = get(a:000, 4, 0)
-  call extend(hidden, {'vmapto': a:mapto, 'remap': remap})
-  let args = [a:keyseq, 'operator_api#_vmap_wrapper', modes, extra, hidden, buffer]
+  call extend(extra, {'_vmapto': a:mapto, '_remap': remap})  " add two options for meta
+  let args = [a:keyseq, 'operator_api#_vmap_wrapper', modes, extra, buffer]
   call call('operator_api#define', args)
 endfunction
 
@@ -540,7 +579,14 @@ function! operator_api#visual_select(...) abort
   return
 endfunction
 
+
 """""""""""" Examples
+
+" define a function to return the text to be replaced
+" fu! ToUpper(info)
+"   return toupper(join(operator_api#selection(), "\n"))
+" endfu
+" call operator_api#define("pp", operator_api#get_replace_ref('Replace333'), "nvio")
 
 "call operator_api#from_vmap(';>', '>', 'NovI', 0)
 "call operator_api#from_vmap(';<', '<', 'NovI', 0)
