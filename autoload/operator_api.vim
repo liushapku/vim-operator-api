@@ -367,10 +367,8 @@ endfunction
 "             - in N/O mode, m is appied to motion for selection, afterwards, we
 "                replay n before op
 "             - in iI mode, there is not way to insert n, since n will be typed
-"             as text. Comparing to i, GUESS: I is able to put the cursor back to the
-"             current buffer if the callback moved the cursor out of the
-"             current buffer
-"
+"             as text. Comparing to i, mode I will put the cursor after the
+"             text changed. After the operation, will stay in insert mode
 "       - 'count1': v:count1,
 "       - 'count': v:count,
 "       - 'register': v:register,
@@ -459,7 +457,7 @@ function! operator_api#_last_replace()
 endfunction
 function! operator_api#_do_replace(newstr)
   let s:_last_replace = a:newstr
-  call operator_api#visual_select("c\<c-r>=operator_api#_last_replace()\<cr>")
+  call operator_api#visual_select('"_'. "c\<c-r>=operator_api#_last_replace()\<cr>")
 endfunction
 
 " take a function with signature f(info) -> replace_str
@@ -509,7 +507,9 @@ call operator_api#define(';o', 'operator_api#default_callback', 'nvio', {'type':
 call operator_api#define(';O', 'operator_api#default_callback', 'NVIO', {'type': 'O'})
 
 " return the selected text from the motion
-function! operator_api#selection()
+" optional:
+"   sep: if not provided, returns a list. otherwise, join with sep
+function! operator_api#selection(...)
   if s:info.motion_direction == 'empty'
     return []
   endif
@@ -530,7 +530,11 @@ function! operator_api#selection()
   else
     Throw 'unknown mode: ' . mode
   endif
-  return lines
+  if a:0 > 0
+    return join(lines, a:1)
+  else
+    return lines
+  endif
 endfunction
 
 " returns whether deleting some chars in selection will move the cursor
