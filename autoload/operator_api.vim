@@ -115,12 +115,9 @@ endfunction
 "  - i, I uses imap
 "  - o, O uses omap
 function! s:init_info(callback_name, invoke_mode, define_mode, extra)
-  let s:meta = {}
-  let s:meta['virtualedit'] = &virtualedit
-  let s:meta['callback'] = a:callback_name
-  let x = s:meta.callback
-  " extra overwrites info
   let info = {
+        \ 'virtualedit': &virtualedit,
+        \ 'callback': a:callback_name,
         \ 'curpos': getcurpos(),
         \ 'length': len(getline('.')),
         \ 'count': v:count,
@@ -202,7 +199,7 @@ function! s:post_process()
 endfunction
 " used to set &opfunc
 function! operator_api#_operatorfunc(motion_wiseness) abort
-  let callback_name = s:meta['callback']
+  let callback_name = s:info['callback']
   let all_callbacks = string(s:callback_map)
   let l:Func = s:callback_map[callback_name]
   call s:set_pos("'[", "']", a:motion_wiseness)
@@ -245,8 +242,8 @@ function! operator_api#_nmap(callback_name, define_mode, extra)
   return cancel . 'g@'
 endfunction
 function! operator_api#_imap_restore()
-  let &virtualedit = s:meta.virtualedit
-  let maparg = s:meta.esc_maparg
+  let &virtualedit = s:info.virtualedit
+  let maparg = s:info.esc_maparg
   if get(maparg, 'buffer', 0)
     exe (maparg.noremap ? 'onoremap ' : 'omap ') .
          \ (maparg.buffer ? '<buffer> ' : '') .
@@ -269,7 +266,7 @@ function! operator_api#_imap(callback_name, define_mode, extra)
     set operatorfunc=operator_api#_operatorfunc
     let &virtualedit = 'onemore'
     " if operator is cancelled, we need to restore virtualedit
-    let s:meta.esc_maparg = maparg('<esc>', 'o', 0, 1)
+    let s:info.esc_maparg = maparg('<esc>', 'o', 0, 1)
     onoremap <buffer> <expr> <esc> operator_api#_imap_restore()
     return "\<c-o>g@"
   catch
@@ -278,12 +275,12 @@ function! operator_api#_imap(callback_name, define_mode, extra)
 endfunction
 " omap is implemented using nmap
 function! operator_api#_omap(callback_name, define_mode, extra)
-  let callback = s:callback_map[a:callback_name]
+  let Callback = s:callback_map[a:callback_name]
   let issamemap = v:operator == 'g@'
         \  && &operatorfunc == 'operator_api#_operatorfunc'
-        \  && s:meta['callback'] == callback
-        \  && (s:meta['callback'] != function('operator_api#_vmap_wrapper') ||
-        \  s:meta['vmapto'] == get(a:extra, '_vmapto', ''))
+        \  && s:info['callback'] == a:callback_name
+        \  && (a:callback_name != 'operator_api#_vmap_wrapper' ||
+        \  s:info['vmapto'] == get(a:extra, 'vmapto', ''))
   " in both cases, s:info.register == v:register
   " s:info.count1 is the count entered before operator
   " v:count1 is for the motion depending on whether the count is propagated
@@ -436,8 +433,8 @@ function! operator_api#define(keyseq, callback, ...) abort
 endfunction
 
 function! operator_api#_vmap_wrapper(info)
-  let remap = s:meta['remap']
-  let mapto = s:meta['vmapto']
+  let remap = a:info['remap']
+  let mapto = a:info['vmapto']
   if a:info.define_mode == 'N' || a:info.define_mode == 'v'
     " in N mode, need to replay count since the count is not propagated to
     " motion
@@ -487,7 +484,7 @@ function! operator_api#from_vmap(keyseq, mapto, ...) abort
   let remap = get(a:000, 1, 1)
   let extra = copy(get(a:000, 2, {}))
   let buffer = get(a:000, 4, 0)
-  call extend(extra, {'_vmapto': a:mapto, '_remap': remap})  " add two options for meta
+  call extend(extra, {'vmapto': a:mapto, 'remap': remap})  " add two options for meta
   let args = [a:keyseq, 'operator_api#_vmap_wrapper', modes, extra, buffer]
   call call('operator_api#define', args)
 endfunction
