@@ -78,6 +78,14 @@ function! s:set_pos(pos_begin, pos_end, curpos, motion_wiseness)
     call setpos("'[", pos1)
     call setpos("']", pos2)
     let empty = 0
+    if !info['repeat']  " we need to save info for repeating '.'
+      let info['visual_repeat'] = {'nrow': pos2[1] - pos1[1]}
+      if a:motion_wiseness == 'char'
+        let info['visual_repeat']['nchar'] = pos2[2]
+      elseif a:motion_wiseness == 'block'
+        let info['visual_repeat']['ncol'] = pos2[2] - pos1[2]
+      endif
+    endif
   else
     " Whenever 'opfunc' is called, '[ is always placed before '] even if
     " a backward motion is given to g@.  But there is the only one exception.
@@ -209,27 +217,39 @@ fu! s:get_repeat_visual_pos()
   " in s:record_count
   let curpos = s:info['curpos']
   let motion = s:info['motion_wiseness']
-  let begin = s:info['begin']
-  let end = s:info['End']
+  let vr = s:info['visual_repeat']
+  let lastline = line('$')
   if motion == 'line'  " use the same number of rows
-    let pos1 = copy(begin)
+    let pos1 = copy(s:info['begin'])
     let pos1[1] = curpos[1]
     let pos2 = copy(pos1)
-    let pos2[1] += end[1] - begin[1]
+    let pos2[1] += vr['nrow']
+    if pos2[1] > lastline
+      let pos2[1] = lastline
+    endif
   elseif motion == 'block' " use the same number of rows and cols
     let pos1 = curpos
     let pos2 = copy(curpos)
-    let pos2[1] += end[1] - begin[1]
-    let pos2[2] += end[2] - begin[2]
+    let pos2[1] += vr['nrow']
+    let pos2[2] += vr['ncol']
+    if pos2[1] > lastline
+      let pos2[1] = lastline
+    endif
   else
     let pos1 = curpos
     let pos2 = copy(curpos)
     " use the same number of rows. 1st row starts from curpos
     " last row uses same number of chars as last selection
-    let pos2[1] += end[1] - begin[1]
-    let pos2[2] = end[2]
+    let pos2[1] += vr['nrow']
+    let pos2[2] = vr['nchar']
+    if pos2[1] > lastline
+      let pos2[1] = lastline
+    endif
+    let lastcol = len(getline(pos2[1]))
+    if pos2[2] > lastcol
+      let pos2[2] = lastcol
+    endif
   endif
-  " let the user decide how to handle breaching of buffer line limit
   return [pos1, pos2]
 endfu
 " used to set &opfunc
