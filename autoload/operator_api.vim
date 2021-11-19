@@ -47,6 +47,8 @@ function! s:compare_pos(pos1, pos2, motion_wiseness)
   endif
 endfunction
 function! s:set_pos(beginmark, endmark, motion_wiseness)
+  let s:info['curpos'] = getcurpos()
+  let s:info['length'] = len(getline('.'))
   let pos1 = getpos(a:beginmark)
   let pos2 = getpos(a:endmark)
   let info = s:info
@@ -114,12 +116,12 @@ endfunction
 "  - v, V uses vmap
 "  - i, I uses imap
 "  - o, O uses omap
+"
+" some other info is injected by s:set_pos
 function! s:init_info(callback_name, invoke_mode, define_mode, extra)
   let info = {
         \ 'virtualedit': &virtualedit,
         \ 'callback': a:callback_name,
-        \ 'curpos': getcurpos(),
-        \ 'length': len(getline('.')),
         \ 'count': v:count,
         \ 'count1': v:count1,
         \ 'register': v:register,
@@ -199,10 +201,10 @@ function! s:post_process()
 endfunction
 " used to set &opfunc
 function! operator_api#_operatorfunc(motion_wiseness) abort
+  call s:set_pos("'[", "']", a:motion_wiseness)
   let callback_name = s:info['callback']
   let all_callbacks = string(s:callback_map)
   let l:Func = s:callback_map[callback_name]
-  call s:set_pos("'[", "']", a:motion_wiseness)
   try
     call l:Func(s:info)
     call s:post_process()
@@ -220,7 +222,24 @@ function! operator_api#_operatorfunc(motion_wiseness) abort
       call setpos('.', getpos("'^"))
     endif
   endtry
+  if s:info.define_mode =~ "[NVIOv]" && (&rtp =~ 'vim-repeat')
+    " call repeat#set("\<Plug>(operator-api-steal-count)\<Plug>(operator-api-repeat)")
+  endif
 endfunction
+
+" helpful for repeat#set to steal the count to not be propagated to motion
+fu! s:record_count(count, count1)
+  let s:info['count'] = a:count
+  let s:info['count1'] = a:count1
+  Log s:info
+endfu
+nnoremap <silent> <Plug>(operator-api-steal-count) :<c-u>call <SID>record_count(v:count, v:count1)<cr>
+nnoremap <silent> <Plug>(operator-api-repeat) .
+nmap <silent> ;g <Plug>(operator-api-steal-count)
+
+fu! operator_api#info()
+  return s:info
+endfu
 
 " because we are using <expr> mapping, the count inserted is still in the
 " typeahead buffer waiting to be processed
@@ -257,6 +276,7 @@ function! operator_api#_imap_restore()
   endif
   return "\<esc>"
 endfunction
+
 " imap is implemented using omap, which is implemented using nmap
 function! operator_api#_imap(callback_name, define_mode, extra)
   " not register and not count can be entered for the op
@@ -435,7 +455,7 @@ endfunction
 function! operator_api#_vmap_wrapper(info)
   let remap = a:info['remap']
   let mapto = a:info['vmapto']
-  if a:info.define_mode == 'N' || a:info.define_mode == 'v'
+  if a:info.define_mode =~ '[Nv]'
     " in N mode, need to replay count since the count is not propagated to
     " motion
     " in v mode, count is not consumed by motion, so we need to keep it
