@@ -103,8 +103,6 @@ Optionals:
 - |operator-replace|  https://github.com/kana/vim-operator-replace
 - |wwwsearch|         https://github.com/kana/vim-wwwsearch
 
-Latest version:
-https://github.com/liushapku/vim-operator-api
 
 
 ==============================================================================
