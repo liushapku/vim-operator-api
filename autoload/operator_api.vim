@@ -49,6 +49,7 @@ endfunction
 function! s:set_pos(beginmark, endmark, motion_wiseness)
   let s:info['curpos'] = getcurpos()
   let s:info['length'] = len(getline('.'))
+  let s:info['buf'] = bufnr('%')
   let pos1 = getpos(a:beginmark)
   let pos2 = getpos(a:endmark)
   let info = s:info
@@ -78,7 +79,7 @@ function! s:set_pos(beginmark, endmark, motion_wiseness)
     call setpos("']", pos2)
     let empty = 0
   else
-    " Whenever 'operatorfunc' is called, '[ is always placed before '] even if
+    " Whenever 'opfunc' is called, '[ is always placed before '] even if
     " a backward motion is given to g@.  But there is the only one exception.
     " If an empty region is given to g@, '[ and '] are set to the same line, but
     " '[ is placed after '].
@@ -117,9 +118,11 @@ endfunction
 "  - i, I uses imap
 "  - o, O uses omap
 "
-" some other info is injected by s:set_pos
-function! s:init_info(callback_name, invoke_mode, define_mode, extra)
+" this is set when _[nvio]map is called
+" some other info is injected by s:set_pos when the opfunc is called
+function! s:init_info(keyseq, callback_name, invoke_mode, define_mode, extra)
   let info = {
+        \ 'key': a:keyseq,
         \ 'virtualedit': &virtualedit,
         \ 'callback': a:callback_name,
         \ 'count': v:count,
@@ -127,7 +130,6 @@ function! s:init_info(callback_name, invoke_mode, define_mode, extra)
         \ 'register': v:register,
         \ 'invoke_mode': a:invoke_mode,
         \ 'define_mode': a:define_mode,
-        \ 'buf': bufnr('%'),
         \ }
   call extend(info, a:extra)
   let s:info = info
@@ -200,7 +202,7 @@ function! s:post_process()
   endif
 endfunction
 " used to set &opfunc
-function! operator_api#_operatorfunc(motion_wiseness) abort
+function! operator_api#_opfunc(motion_wiseness) abort
   call s:set_pos("'[", "']", a:motion_wiseness)
   let callback_name = s:info['callback']
   let all_callbacks = string(s:callback_map)
@@ -222,20 +224,47 @@ function! operator_api#_operatorfunc(motion_wiseness) abort
       call setpos('.', getpos("'^"))
     endif
   endtry
-  if s:info.define_mode =~ "[NVIOv]" && (&rtp =~ 'vim-repeat')
-    " call repeat#set("\<Plug>(operator-api-steal-count)\<Plug>(operator-api-repeat)")
-  endif
+  call s:set_repeat(s:info['define_mode'])
 endfunction
 
+" for repeat#set:
+"
+" g:repeat_count is the second parameter of repeat#set, if provided, or set to v:count when typing op map
+" the count when doing repeat is determined by (used by repeat#run(n)):
+" 0. repeat#run is only done when g:repeat_tick is b:changedtick
+" 1. if g:repeat_count is -1:  ''
+" 2. elseif repeat it self has count (like <count>.): this new count
+"    elseif g:repeate_count is 0: ''
+"    else g:repeate_count
+" Note the following autocmd in repeat
+" augroup repeatPlugin
+"     autocmd!
+"     autocmd BufLeave,BufWritePre,BufReadPre * let g:repeat_tick = (g:repeat_tick == b:changedtick || g:repeat_tick == 0) ? 0 : -1
+"     autocmd BufEnter,BufWritePost * if g:repeat_tick == 0|let g:repeat_tick = b:changedtick|endif
+" augroup END
+fu! s:set_repeat(define_mode)
+  if (&rtp =~ 'vim-repeat')
+    let feed = "\<Plug>(operator-api-repeat)" . get(s:info, 'repeat_feed', '')
+    if a:define_mode =~ "[NVIO]"
+      call repeat#set("\<Plug>(operator-api-suppress-count)".feed , s:info['count'])
+    else
+      call repeat#set("\<Plug>(operator-api-propagate-count)".feed, s:info['count'])
+    endif
+  endif
+endfu
+
+
 " helpful for repeat#set to steal the count to not be propagated to motion
-fu! s:record_count(count, count1)
+" this count is supplied by repeat#run
+fu! s:record_count(propagate, count, count1)
   let s:info['count'] = a:count
   let s:info['count1'] = a:count1
-  Log s:info
+  let rv = a:propagate? "" : "\<esc>"
+  return rv
 endfu
-nnoremap <silent> <Plug>(operator-api-steal-count) :<c-u>call <SID>record_count(v:count, v:count1)<cr>
+nnoremap <silent> <expr> <Plug>(operator-api-propagate-count) <SID>record_count(1, v:count, v:count1)
+nnoremap <silent> <expr> <Plug>(operator-api-suppress-count) <SID>record_count(0, v:count, v:count1)
 nnoremap <silent> <Plug>(operator-api-repeat) .
-nmap <silent> ;g <Plug>(operator-api-steal-count)
 
 fu! operator_api#info()
   return s:info
@@ -248,14 +277,14 @@ endfu
 "
 " Maybe: using n for the count to be propagated
 " using N for the count not to be propagated
-function! operator_api#_nmap(callback_name, define_mode, extra)
+function! operator_api#_nmap(keyseq, callback_name, define_mode, extra)
   " in both cases, s:info.register == v:register
   " s:info.count1 is the count entered before operator
   " v:count1 is for the motion depending on whether the count is propagated
   " from the op. So do not use it for the op
   "
-  call s:init_info(a:callback_name, 'n', a:define_mode, a:extra)
-  set operatorfunc=operator_api#_operatorfunc
+  call s:init_info(a:keyseq, a:callback_name, 'n', a:define_mode, a:extra)
+  set opfunc=operator_api#_opfunc
   " if N mode: then cancel the count by esc
   let cancel = a:define_mode == 'n' ? '' : printf("\<esc>".'"%s', s:info.register)
   return cancel . 'g@'
@@ -278,12 +307,12 @@ function! operator_api#_imap_restore()
 endfunction
 
 " imap is implemented using omap, which is implemented using nmap
-function! operator_api#_imap(callback_name, define_mode, extra)
+function! operator_api#_imap(keyseq, callback_name, define_mode, extra)
   " not register and not count can be entered for the op
   " the motion can have a count
   try
-    call s:init_info(a:callback_name, 'i', a:define_mode, a:extra)
-    set operatorfunc=operator_api#_operatorfunc
+    call s:init_info(a:keyseq, a:callback_name, 'i', a:define_mode, a:extra)
+    set opfunc=operator_api#_opfunc
     let &virtualedit = 'onemore'
     " if operator is cancelled, we need to restore virtualedit
     let s:info.esc_maparg = maparg('<esc>', 'o', 0, 1)
@@ -293,11 +322,12 @@ function! operator_api#_imap(callback_name, define_mode, extra)
     Throw 'operator imap'
   endtry
 endfunction
-" omap is implemented using nmap
-function! operator_api#_omap(callback_name, define_mode, extra)
+" omap is operator pending mode: when the motion is the same as op we do op in
+" current line
+function! operator_api#_omap(keyseq, callback_name, define_mode, extra)
   let Callback = s:callback_map[a:callback_name]
   let issamemap = v:operator == 'g@'
-        \  && &operatorfunc == 'operator_api#_operatorfunc'
+        \  && &opfunc == 'operator_api#_opfunc'
         \  && s:info['callback'] == a:callback_name
         \  && (a:callback_name != 'operator_api#_vmap_wrapper' ||
         \  s:info['vmapto'] == get(a:extra, 'vmapto', ''))
@@ -310,14 +340,14 @@ function! operator_api#_omap(callback_name, define_mode, extra)
   elseif v:count1 == 1 || a:define_mode == 'o'
     return '_'
   else
-    " use normal to cancel make the count already typed ineffective
+    " use normal to cancel the count, which makes the count already typed ineffective
     return printf(":normal! %d-\<cr>", v:count1 - 1)
   endif
 endfunction
 
-function! operator_api#_vmap(callback_name, define_mode, extra)
-  call s:init_info(a:callback_name, 'v', a:define_mode, a:extra)
-  set operatorfunc=operator_api#_operatorfunc
+function! operator_api#_vmap(keyseq, callback_name, define_mode, extra)
+  call s:init_info(a:keyseq, a:callback_name, 'v', a:define_mode, a:extra)
+  set opfunc=operator_api#_opfunc
   " register and count should be obtained from s:info, not v:register and
   " v:count. When the motion is entered, the register cannot be accessed, the
   " v:count is for the motion instead of the operator, since we use :normal
@@ -346,9 +376,9 @@ function! s:define(keyseq, callback, extra, mode, define_mode, buffer)
   let callback_name = s:func_to_string(a:callback)
   let s:callback_map[callback_name] = Callback
   let buffer = a:buffer? '<buffer>' : ''
-  let template = '%snoremap %s <silent> <expr> %s operator_api#_%smap(%s, %s, %s)'
+  let template = '%snoremap %s <silent> <expr> %s operator_api#_%smap(%s, %s, %s, %s)'
   let command = printf(template, a:mode, buffer, a:keyseq, a:mode,
-        \  string(callback_name), string(a:define_mode), a:extra)
+        \  string(a:keyseq), string(callback_name), string(a:define_mode), a:extra)
   exe command
 endfunction
 
@@ -367,6 +397,10 @@ endfunction
 "   callback: funcref or string name of func
 "     this func will be called with info, a dict with the following keys,
 "     which stores the infomation about the motion (help_info)
+"       the map. After each invokation, either using the map or, using
+"       "."/"g@" again, it increases by 1
+"       - 'repeat_feed': user can set this in the callback to be feed to when
+"       using repeat
 "       - 'buf': the current buffer
 "       - 'length': line length of current line
 "       - 'invoke_mode': any in 'nvoi'
