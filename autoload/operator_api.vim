@@ -46,12 +46,12 @@ function! s:compare_pos(pos1, pos2, motion_wiseness)
     return 0
   endif
 endfunction
-function! s:set_pos(beginmark, endmark, motion_wiseness)
-  let s:info['curpos'] = getcurpos()
+function! s:set_pos(pos_begin, pos_end, curpos, motion_wiseness)
+  let s:info['curpos'] = a:curpos
   let s:info['length'] = len(getline('.'))
   let s:info['buf'] = bufnr('%')
-  let pos1 = getpos(a:beginmark)
-  let pos2 = getpos(a:endmark)
+  let pos1 = a:pos_begin
+  let pos2 = a:pos_end
   let info = s:info
   if info.invoke_mode =~ 'v'
     if &selection == 'exclusive' " exclusive needs special treatment
@@ -122,6 +122,7 @@ endfunction
 " some other info is injected by s:set_pos when the opfunc is called
 function! s:init_info(keyseq, callback_name, invoke_mode, define_mode, extra)
   let info = {
+        \ 'repeat': 0,
         \ 'key': a:keyseq,
         \ 'virtualedit': &virtualedit,
         \ 'callback': a:callback_name,
@@ -201,10 +202,60 @@ function! s:post_process()
     call setpos('.', curpos)
   endif
 endfunction
+fu! s:get_repeat_visual_pos()
+  " don't know why getcurpos() will return the curpos when the last v mode op
+  " is invoked. instead of the correct curpos (curpos when the "." is typed)
+  " so we saved the correct curpos in s:info before "." is typed
+  " in s:record_count
+  let curpos = s:info['curpos']
+  let motion = s:info['motion_wiseness']
+  let begin = s:info['begin']
+  let end = s:info['End']
+  if motion == 'line'  " use the same number of rows
+    let pos1 = copy(begin)
+    let pos1[1] = curpos[1]
+    let pos2 = copy(pos1)
+    let pos2[1] += end[1] - begin[1]
+  elseif motion == 'block' " use the same number of rows and cols
+    let pos1 = curpos
+    let pos2 = copy(curpos)
+    let pos2[1] += end[1] - begin[1]
+    let pos2[2] += end[2] - begin[2]
+  else
+    let pos1 = curpos
+    let pos2 = copy(curpos)
+    " use the same number of rows. 1st row starts from curpos
+    " last row uses same number of chars as last selection
+    let pos2[1] += end[1] - begin[1]
+    let pos2[2] = end[2]
+  endif
+  " let the user decide how to handle breaching of buffer line limit
+  return [pos1, pos2]
+endfu
 " used to set &opfunc
 function! operator_api#_opfunc(motion_wiseness) abort
-  call s:set_pos("'[", "']", a:motion_wiseness)
-  let callback_name = s:info['callback']
+  " in all modes, when opfunc is invoked, '[ and '] depicts the start and end
+  " of selection. Only when the selection is empty, '] is place before '[ by
+  " one char.
+  " ONLY ONE EXCPETION: when repeating a visual mode op, not any of
+  " '[, '], '<, '> is set. The pos should be set according to rule of `:h
+  " visual-repeat`
+  let info = s:info
+  " Log getpos("'[") getpos("']") getpos("'<") getpos("'>")
+  " Log 'before setting' info
+  if info['repeat'] && info['invoke_mode'] == 'v'
+    let [pos1, pos2] = s:get_repeat_visual_pos()
+    let curpos = s:info['curpos'] " this is set by s:record_count.
+          " don't know why when repeating visual mode op, the getcurpos()
+          " returns the pos when entering last op
+  else
+    let pos1 = getpos("'[")
+    let pos2 = getpos("']")
+    let curpos = getcurpos()
+  endif
+  call s:set_pos(pos1, pos2, curpos, a:motion_wiseness)
+  " Log 'after setting' info
+  let callback_name = info['callback']
   let all_callbacks = string(s:callback_map)
   let l:Func = s:callback_map[callback_name]
   try
@@ -225,6 +276,7 @@ function! operator_api#_opfunc(motion_wiseness) abort
     endif
   endtry
   call s:set_repeat(s:info['define_mode'])
+  let s:info['repeat'] = s:info['repeat'] + 1
 endfunction
 
 " for repeat#set:
@@ -253,10 +305,13 @@ fu! s:set_repeat(define_mode)
   endif
 endfu
 
-
 " helpful for repeat#set to steal the count to not be propagated to motion
 " this count is supplied by repeat#run
 fu! s:record_count(propagate, count, count1)
+  " when repeating last visual mode op, the getcurpos() returns the curpos when
+  " entering the last visual mode op, instead of the current pos when typing "."
+  " so we need to save the current pos before typing "."
+  let s:info['curpos'] = getcurpos()
   let s:info['count'] = a:count
   let s:info['count1'] = a:count1
   let rv = a:propagate? "" : "\<esc>"
@@ -396,10 +451,13 @@ endfunction
 "   keyseq: key sequence to be mapped
 "   callback: funcref or string name of func
 "     this func will be called with info, a dict with the following keys,
-"     which stores the infomation about the motion (help_info)
+"     which stores the infomation about the motion (help_info, s:info_desc)
 "       the map. After each invokation, either using the map or, using
 "       "."/"g@" again, it increases by 1
-"       - 'repeat_feed': user can set this in the callback to be feed to when
+"       - 'repeat': when using the map directly, set to 0. After each
+"       invokation (using map directly, or repeat '.', or 'g@' directly), it is
+"       increased by one. So repeat !=0 means repeating
+"       - 'repeat_feed': [out], user can set this in the callback to be feed to when
 "       using repeat
 "       - 'buf': the current buffer
 "       - 'length': line length of current line
